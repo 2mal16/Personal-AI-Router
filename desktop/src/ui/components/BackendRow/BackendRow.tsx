@@ -242,6 +242,8 @@ export function BackendRow({
     ])
 
     const portsConfirmMessage = useMemo(() => {
+        if (caps.externallyManaged)
+            return 'Update the port PAIR connects to. llama-swap will keep running under its existing management.'
         if (serverPortChanged && proxyPortChanged) {
             return 'Changing the server and proxy ports will restart the engine and proxy.'
         }
@@ -249,7 +251,7 @@ export function BackendRow({
             return 'Changing the server port will restart the engine.'
         }
         return 'Changing the proxy port will restart the proxy.'
-    }, [serverPortChanged, proxyPortChanged])
+    }, [serverPortChanged, proxyPortChanged, caps.externallyManaged])
 
     const handleInstall = useCallback(() => {
         window.pairApi.engines.install(backend.type, nodeId)
@@ -304,7 +306,7 @@ export function BackendRow({
             <BackendFooter
                 backend={displayBackend}
                 targetOs={targetOs}
-                showUninstall={isLocalNode}
+                showUninstall={isLocalNode && !caps.externallyManaged}
                 disabled={controlsDisabled}
                 onUninstall={requestUninstall}
             />

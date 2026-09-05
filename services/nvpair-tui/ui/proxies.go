@@ -91,7 +91,7 @@ func newProxiesView(client *rpc.Client) *proxiesView {
 		portInput: ti,
 		engines: []*proxyEngine{
 			{label: "Ollama", prefix: "proxy", table: newTable(nil)},
-			{label: "LM Studio", prefix: "lmstudio-proxy", table: newTable(nil)},
+			{label: "OpenAI (LM Studio / llama-swap)", prefix: "lmstudio-proxy", table: newTable(nil)},
 		},
 	}
 	return v

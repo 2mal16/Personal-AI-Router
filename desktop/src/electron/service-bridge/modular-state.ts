@@ -40,8 +40,8 @@ type BrokerNodeSource = ProxyNodeSource | 'broker'
  * Engines surfaced by the broker's proxy plane. Other engine-manager engines
  * are not currently routed across nodes.
  */
-export type ProxyEngine = Extract<EngineType, 'ollama' | 'lm-studio'>
-export const PROXY_ENGINES: readonly ProxyEngine[] = ['ollama', 'lm-studio']
+export type ProxyEngine = Extract<EngineType, 'ollama' | 'lm-studio' | 'llama-swap'>
+export const PROXY_ENGINES: readonly ProxyEngine[] = ['ollama', 'lm-studio', 'llama-swap']
 
 /** Map a proxy node source onto the engine it describes. */
 const PROXY_SOURCE_ENGINE: Record<ProxyNodeSource, ProxyEngine> = {
@@ -164,7 +164,7 @@ function emptyPresence(): EnginePresence {
 }
 
 function emptyEngines(): Record<ProxyEngine, EnginePresence> {
-    return { ollama: emptyPresence(), 'lm-studio': emptyPresence() }
+    return { ollama: emptyPresence(), 'lm-studio': emptyPresence(), 'llama-swap': emptyPresence() }
 }
 
 /** Immutably set one engine's presence, preserving the other. */
@@ -175,7 +175,8 @@ function setEngine(
 ): Record<ProxyEngine, EnginePresence> {
     return {
         ollama: engine === 'ollama' ? presence : engines.ollama,
-        'lm-studio': engine === 'lm-studio' ? presence : engines['lm-studio']
+        'lm-studio': engine === 'lm-studio' ? presence : engines['lm-studio'],
+        'llama-swap': engine === 'llama-swap' ? presence : engines['llama-swap']
     }
 }
 
@@ -390,7 +391,7 @@ export function parseWorkloadsInitial(value: JsonValue | undefined): Workload[] 
 
 /** True for an engine fronted by a broker-supervised reverse proxy. */
 export function isProxyEngine(engine: EngineType): engine is ProxyEngine {
-    return engine === 'ollama' || engine === 'lm-studio'
+    return engine === 'ollama' || engine === 'lm-studio' || engine === 'llama-swap'
 }
 
 const PENDING_OP_IDLE_TIMEOUT_MS = 90_000
@@ -726,6 +727,17 @@ function parseProxyNode(params: JsonValue | undefined, engine: ProxyEngine): Mod
         // nvpair-engine-manager, not discovery.
         version: null
     }
+    if (engine === 'lm-studio') {
+        const inventory = parseModelsByEngine(obj.modelsByEngine)
+        if (Object.keys(inventory).length > 0) {
+            engines['lm-studio'] = { ...engines['lm-studio'], up: 'lmstudio' in inventory }
+            engines['llama-swap'] = {
+                up: 'llama-swap' in inventory,
+                port: numberValue(obj.port),
+                version: null
+            }
+        }
+    }
     return {
         id,
         sources: [engine === 'ollama' ? 'ollama-proxy' : 'lmstudio-proxy'],
@@ -900,7 +912,7 @@ class ModularBridgeState {
     // Per-engine bound proxy port reported by the broker. 0 = not reported yet;
     // we never fabricate a default — an unknown port surfaces as null, not a
     // guess. `ollama` is the `ollama-proxy`, `lm-studio` is the `lmstudio-proxy`.
-    private proxyPorts: Record<ProxyEngine, number> = { ollama: 0, 'lm-studio': 0 }
+    private proxyPorts: Record<ProxyEngine, number> = { ollama: 0, 'lm-studio': 0, 'llama-swap': 0 }
     private selfId: string | null = null
     /**
      * Authoritative local-engine facts from `nvpair-engine-manager`, keyed by
@@ -1102,7 +1114,7 @@ class ModularBridgeState {
 
     /** Bound proxy port for an engine reported by the broker, or null if unknown. */
     getProxyPort(engine: ProxyEngine): number | null {
-        const port = this.proxyPorts[engine]
+        const port = this.proxyPorts[engine === 'llama-swap' ? 'lm-studio' : engine]
         return port > 0 ? port : null
     }
 
@@ -2306,7 +2318,13 @@ class ModularBridgeState {
             // engine so the Edit Node proxy port reflects the actually-bound value
             // immediately. Only on a real change so the startup baseline `ready`
             // (and redundant re-readies) stay quiet.
-            if (changed) this.emitLocalEngineStatus(engine)
+            if (changed) {
+                this.emitLocalEngineStatus(engine)
+                // llama-swap is fronted by the same proxy listener as LM Studio
+                // (getProxyPort maps it onto that entry), so its row has to be
+                // re-emitted from the same `ready`.
+                if (engine === 'lm-studio') this.emitLocalEngineStatus('llama-swap')
+            }
             return
         }
 
@@ -2358,7 +2376,14 @@ class ModularBridgeState {
             proxyAddresses: sources.some(entry => entry !== 'broker')
                 ? existing.proxyAddresses
                 : [],
-            engines: setEngine(existing.engines, engine, emptyPresence()),
+            engines:
+                engine === 'lm-studio'
+                    ? {
+                          ...existing.engines,
+                          'lm-studio': emptyPresence(),
+                          'llama-swap': emptyPresence()
+                      }
+                    : setEngine(existing.engines, engine, emptyPresence()),
             lastSeen: Date.now()
         }
         this.nodes.set(next.id, next)
@@ -2623,7 +2648,14 @@ class ModularBridgeState {
             models: existing.models,
             modelsByEngine: existing.modelsByEngine,
             loadedByEngine: existing.loadedByEngine,
-            engines: setEngine(existing.engines, engine, next.engines[engine]),
+            engines:
+                engine === 'lm-studio'
+                    ? {
+                          ...existing.engines,
+                          'lm-studio': next.engines['lm-studio'],
+                          'llama-swap': next.engines['llama-swap']
+                      }
+                    : setEngine(existing.engines, engine, next.engines[engine]),
             lastSeen: Math.max(existing.lastSeen, next.lastSeen)
         }
     }

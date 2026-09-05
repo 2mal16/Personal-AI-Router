@@ -1,0 +1,84 @@
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+# Use an existing llama-swap server
+
+This fork supports llama-swap as an **externally managed engine**. Run PAIR on
+both the client machine and each machine hosting llama-swap, and pair those
+nodes. Each hosting node connects to its own llama-swap over loopback. PAIR
+handles cluster discovery, model inventory, routing, and authenticated peer
+transport; llama-swap continues to manage its models and inference processes.
+
+PAIR never installs, starts, stops, restarts, uninstalls, or loads/unloads models
+for an external engine. Exiting PAIR leaves llama-swap running. The engine row
+shows Connected or Offline without a process-control switch. Models are listed
+without download, load, eject, or delete controls. In the terminal interface the
+engine is labelled `(external)` and its lifecycle commands are unavailable.
+
+## Configure each hosting node
+
+1. Build and deploy this fork's matching desktop/services on every PAIR node.
+   Follow [Building and Running](building.mdx). Existing stock nodes do not have
+   the new routing and display support.
+2. Start llama-swap using your existing configuration and process manager. Ensure
+   `http://127.0.0.1:10000/v1/models` is accessible on that same machine.
+3. Start PAIR. It checks port 10000 automatically. In the desktop's node Engine
+   settings, expand llama-swap to see its model inventory and connection port.
+4. If llama-swap uses another port, change its **Server** port in the local
+   llama-swap row. This changes where PAIR connects; it does not reconfigure or
+   restart llama-swap. Port edits apply to the local node only.
+5. Pair the nodes through the normal PAIR pairing flow. After discovery refreshes,
+   peers see the models attributed to llama-swap.
+
+For a headless node with a nondefault port, save this manifest override as
+`engines/llama-swap.json` in PAIR's per-user data directory before starting PAIR:
+
+```json
+{
+  "engine": "llama-swap",
+  "runtime": { "port": 10001 }
+}
+```
+
+The data directory is `~/.config/Nvidia Corporation/Personal AI Router` on Linux
+(or under `XDG_CONFIG_HOME`), `~/Library/Application Support/Nvidia Corporation/Personal AI Router`
+on macOS, and `%LOCALAPPDATA%\Nvidia Corporation\Personal AI Router` on Windows.
+Restart PAIR after manually changing this file; llama-swap can keep running.
+
+An address reachable from another machine is not sufficient if llama-swap binds
+only that LAN address. Ensure it also answers loopback on its hosting node.
+Arbitrary remote endpoint URLs, HTTPS upstreams, and API-key authentication are
+not implemented by this integration.
+
+## Use the models
+
+Use the local OpenAI-compatible proxy URL reported by PAIR. LM Studio and
+llama-swap share that listener. Append `/v1` when configuring a client that asks
+for an OpenAI API base URL. `GET /v1/models` aggregates their model listings across
+eligible nodes. Send the exact model ID returned by that endpoint when making a
+chat completion, completion, embedding, or Responses request.
+
+The IDs come from llama-swap's `data[].id` response. PAIR does not rename them or
+infer capabilities from their names. A configured model is available even if
+llama-swap has not loaded it into memory; PAIR does not label it as resident.
+llama-swap performs its normal on-demand loading when inference arrives.
+
+When both engines on one node expose the same model ID, the local endpoint
+selection prefers LM Studio. Normal PAIR node ranking and failover still apply
+across nodes, with workload attribution identifying llama-swap requests.
+
+## Availability and limits
+
+Status and inventory are checked periodically. An unreachable engine stops
+contributing its models; recovery and changes to the configured model list are
+reflected on subsequent sweeps. Healthy engines on the same node remain usable.
+Peer inference terminates at the receiving node's local engine and never routes
+onward to another peer.
+
+The existing OpenAI proxy response-header timeout is 120 seconds. A llama-swap
+cold load that takes longer can time out or trigger failover; this integration
+does not add per-engine timeout configuration. Non-JSON audio upload routing,
+Anthropic endpoints, capability-based model selection, and model aliases are
+outside this change.

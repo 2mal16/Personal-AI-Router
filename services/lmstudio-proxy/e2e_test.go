@@ -162,7 +162,7 @@ func TestE2EFailoverOverRealBinary(t *testing.T) {
 	defer good.Close()
 
 	port := e2eFreePort(t)
-	cmd := exec.Command(proxyBin, "--port", strconv.Itoa(port))
+	cmd := exec.Command(proxyBin, "--ignore-persisted-port", "--port", strconv.Itoa(port))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

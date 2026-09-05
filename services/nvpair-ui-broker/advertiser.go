@@ -172,12 +172,17 @@ func (b *Broker) reconcileAdvertiseLMStudio(client *http.Client) {
 	// which later makes the compatibility proxy on the facade port look like the
 	// backend and wrongly disables managed mode.
 	up := probe && proxyPort != 0 && enginePort != proxyPort && checkLMStudioHealth(client, enginePort)
-	if up {
+	inventories := b.openAIEngineModels()
+	lmModels, lmKnown := inventories["lmstudio"]
+	b.setOpenAIEngine("lmstudio", enginePort, up, lmModels, lmKnown)
+	swapPort, swapRunning := b.localEnginePort("llama-swap", 0)
+	swapUp := swapRunning && swapPort > 0 && proxyPort > 0 && swapPort != proxyPort
+	swapModels, swapKnown := inventories["llama-swap"]
+	b.setOpenAIEngine("llama-swap", swapPort, swapUp, swapModels, swapKnown)
+	if up || swapUp {
 		b.registerService(noderec.RegisterParams{Service: noderec.ServiceLMStudio, Port: proxyPort})
-		b.setProxyLocalBackend(b.getLMStudioProxy(), "lmstudio", enginePort, true)
 	} else {
 		b.unregisterService(noderec.ServiceLMStudio)
-		b.setProxyLocalBackend(b.getLMStudioProxy(), "lmstudio", enginePort, false)
 	}
 }
 
@@ -286,4 +291,54 @@ func checkLMStudioHealth(client *http.Client, port int) bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// openAIEngineModels returns engine-manager's current per-engine inventory for
+// the engines behind the shared OpenAI-compatible proxy. It keeps the
+// engine:models contract intact: an engine key present with an empty list means
+// "queried, no models", while a missing key — including every key when the call
+// itself fails — means "not queryable this sweep", which the caller must not
+// turn into an empty inventory.
+func (b *Broker) openAIEngineModels() map[string][]string {
+	em := b.getEngineMgr()
+	if em == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	raw, rpcErr, err := em.Call(ctx, "engine:models", json.RawMessage(`{}`))
+	if err != nil || rpcErr != nil {
+		return nil
+	}
+	var inventory struct {
+		ModelsByEngine map[string][]string `json:"modelsByEngine"`
+	}
+	if json.Unmarshal(raw, &inventory) != nil {
+		return nil
+	}
+	return inventory.ModelsByEngine
+}
+
+// setOpenAIEngine hands the shared proxy one of its loopback OpenAI-compatible
+// engines. known says whether models is this sweep's real inventory: when it is
+// false the models field is omitted entirely, so a transient engine:models
+// failure leaves the proxy's last-known inventory in place instead of clearing
+// it and refusing every named model until the next successful sweep. A known
+// empty inventory is still sent, as the explicit "serves nothing" it is.
+func (b *Broker) setOpenAIEngine(engine string, port int, healthy bool, models []string, known bool) {
+	p := b.getLMStudioProxy()
+	if p == nil {
+		return
+	}
+	var inventory *[]string
+	if known {
+		if models == nil {
+			models = []string{}
+		}
+		inventory = &models
+	}
+	b.callProxyManual(p, engine, "node/set-local-backend", struct {
+		proxyLocalBackend
+		Models *[]string `json:"models,omitempty"`
+	}{proxyLocalBackend{Engine: engine, Host: "127.0.0.1", Port: port, Healthy: healthy}, inventory}, "local-backend")
 }

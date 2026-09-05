@@ -39,5 +39,21 @@ export default function EngineIcon({ type, size = 32 }: { type: EngineType; size
         )
     }
 
+    if (type === 'llama-swap') {
+        return (
+            <span
+                aria-label="llama-swap"
+                style={{
+                    ...containerStyle,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#222'
+                }}
+            >
+                ⇄
+            </span>
+        )
+    }
     return null
 }

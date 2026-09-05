@@ -152,6 +152,7 @@ var inferenceEndpoints = map[string]bool{
 	"/v1/chat/completions": true,
 	"/v1/completions":      true,
 	"/v1/embeddings":       true,
+	"/v1/responses":        true,
 }
 
 // isInferenceRequest reports whether a request should be tracked as a
@@ -340,7 +341,7 @@ type Proxy struct {
 	// it is never sourced from discovery, so an ingress request can only ever
 	// reach this node's own local engine and can never be re-routed to a peer.
 	backendMu sync.RWMutex
-	backend   localBackend
+	engines   map[string]localBackend
 
 	selectedMu sync.RWMutex
 	selectedID string
@@ -697,6 +698,7 @@ func (p *Proxy) emitWorkload(method string, w Workload) {
 // pinned to that peer's exact server cert. Empty peerUUID means a plain-HTTP
 // dial — the local backend (self) or an explicit manual node.
 type candidate struct {
+	engine   string
 	id       string
 	url      *url.URL
 	peerUUID string
@@ -1042,7 +1044,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		wl = &Workload{
 			ID:          reqID,
 			Model:       model,
-			Engine:      workloadEngine,
+			Engine:      candidates[0].engineName(),
 			RunID:       p.runID,
 			State:       "running",
 			ScheduledOn: candidates[0].id,
@@ -1194,6 +1196,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 						wlMu.Lock()
 						if !terminated && wl.ScheduledOn != cand.id {
 							wl.ScheduledOn = cand.id
+							wl.Engine = cand.engineName()
 							snapshot := *wl
 							wlMu.Unlock()
 							p.emitWorkload(workloadStartedMethod, snapshot)
@@ -1384,18 +1387,37 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 			return
 		}
 		peerUUID := ""
+		// engine names which local endpoint actually answered for self; a peer
+		// is attributed from its advertised per-engine inventory instead.
+		engine := ""
+		// extra holds this node's remaining local engines, appended after the
+		// preferred one so LM Studio still leads the candidate order.
+		var extra []candidate
 		switch {
 		case isSelfTarget(u, selfPort):
 			// Our own advertised endpoint (lm now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
 			// still used this node's real (discovered) model list above.
-			lb, ok := p.localBackendTarget()
-			if !ok {
+			localCandidates := p.localEngineCandidates(model)
+			if len(localCandidates) == 0 {
 				slog.Debug("resolveCandidates: no local backend for self", "node_id", n.ID)
 				return
 			}
-			u = lb
+			u = localCandidates[0].url
+			engine = localCandidates[0].engine
+			// With no model named — an aggregate model list, or an inference
+			// body that omits one — every local engine is a candidate, so the
+			// list covers both and failover can reach the second.
+			if model == "" {
+				for _, local := range localCandidates[1:] {
+					if isSelfTarget(local.url, selfPort) {
+						continue
+					}
+					local.id = n.ID
+					extra = append(extra, local)
+				}
+			}
 		case p.mesh.HasPin(n.ClusterUUID):
 			// A pinned cluster peer: reach it only over mTLS to its promoted
 			// proxy (the lm port now advertises the proxy, not the engine).
@@ -1429,11 +1451,22 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 			return
 		}
 		seenHost[u.Host] = true
+		if engine == "" {
+			engine = n.engineForModel(model)
+		}
 		out = append(out, candidate{
 			id:       n.ID,
 			url:      u,
 			peerUUID: peerUUID,
+			engine:   engine,
 		})
+		for _, local := range extra {
+			if seenHost[local.url.Host] {
+				continue
+			}
+			seenHost[local.url.Host] = true
+			out = append(out, local)
+		}
 	}
 
 	// Capability has already been enforced. An eligible explicit selection wins,
@@ -1852,7 +1885,8 @@ func subscribedToNode(n noderec.DirectoryNode) (Node, bool) {
 		// so a model a dual-engine node serves solely via Ollama isn't accepted as
 		// an LM Studio owner here (falls back to the union for a peer that sends
 		// no attribution — see DirectoryNode.EngineModels).
-		Models: append([]string(nil), n.EngineModels("lmstudio")...),
+		Models:         append(append([]string(nil), n.EngineModels("lmstudio")...), n.ModelsByEngine["llama-swap"]...),
+		ModelsByEngine: n.ModelsByEngine,
 	}, true
 }
 
@@ -2040,4 +2074,22 @@ func (p *Proxy) handleMessage(msg *Message) {
 			log.Printf("failed to send error response: %v", err)
 		}
 	}
+}
+
+func (c candidate) engineName() string {
+	if c.engine != "" {
+		return c.engine
+	}
+	return workloadEngine
+}
+
+func (n Node) engineForModel(model string) string {
+	for _, name := range []string{"lmstudio", "llama-swap"} {
+		for _, available := range n.ModelsByEngine[name] {
+			if available == model {
+				return name
+			}
+		}
+	}
+	return workloadEngine
 }

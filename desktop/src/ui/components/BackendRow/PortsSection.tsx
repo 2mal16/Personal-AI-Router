@@ -31,8 +31,14 @@ export function PortsSection({
                 <Text kind="body/semibold/sm">Ports</Text>
             </summary>
             <div className="p-3">
+                {caps.externallyManaged && (
+                    <Text kind="body/regular/sm">
+                        Server is the local port PAIR connects to. Configure llama-swap itself
+                        separately.
+                    </Text>
+                )}
                 <BackendPorts
-                    proxyPort={edit.proxyPort}
+                    proxyPort={caps.externallyManaged ? '' : edit.proxyPort}
                     serverPort={edit.serverPort}
                     changed={portsChanged}
                     disabled={anyLoading}

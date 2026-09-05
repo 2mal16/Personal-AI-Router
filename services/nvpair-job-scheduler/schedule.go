@@ -14,7 +14,7 @@ import (
 
 // schedulerEngines is the fixed set of engine-specific output contracts. Both
 // receive the same node-wide ranking because their work shares node resources.
-var schedulerEngines = []string{"ollama", "lmstudio"}
+var schedulerEngines = []string{"ollama", "lmstudio", "llama-swap"}
 
 // NodeRank is retained as the scheduler's public status type while the wire
 // definition is shared with the broker and proxies.

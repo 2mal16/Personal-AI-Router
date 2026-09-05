@@ -112,6 +112,7 @@ type Fetch struct {
 //   - "command": the engine is a daemon brought up/down by commands
 //     (e.g. LM Studio's `lms`); liveness = the readiness/health probe,
 //     and Stop.Cmd brings it down.
+//   - "external": probe an existing server without owning its lifecycle.
 type Runtime struct {
 	Mode  string            `json:"mode,omitempty"`
 	Bin   string            `json:"bin,omitempty"`
@@ -546,6 +547,11 @@ func (m *Manifest) Validate() error {
 		}
 	}
 	for name, a := range m.Actions {
+		for _, platform := range m.Platforms {
+			if platform.Runtime.modeOrDefault() == "external" && (a.HTTP == nil || a.HTTP.Method != "GET" || a.RestartAfter || len(a.Cmd) > 0 || a.RemovePath != nil) {
+				return fmt.Errorf("action %q: external engines only support read-only HTTP GET actions", name)
+			}
+		}
 		if err := a.validate(name); err != nil {
 			return err
 		}
@@ -573,12 +579,19 @@ func (p *Platform) validate(key string) error {
 		if strings.TrimSpace(p.Runtime.Bin) == "" {
 			return fmt.Errorf("platform %q: runtime.bin is required in process mode", key)
 		}
+	case "external":
+		if p.Runtime.Port < 1 || p.Runtime.Port > 65535 || p.Runtime.Ready == nil {
+			return fmt.Errorf("platform %q: external engines require a fixed port and readiness probe", key)
+		}
+		if p.Install != nil || p.Uninstall != nil || p.Runtime.Bin != "" || p.Runtime.CLI != "" || len(p.Runtime.Start) > 0 || p.Runtime.Stop != nil {
+			return fmt.Errorf("platform %q: external engines cannot declare lifecycle commands", key)
+		}
 	case "command":
 		if len(p.Runtime.Start) == 0 {
 			return fmt.Errorf("platform %q: runtime.start is required in command mode", key)
 		}
 	default:
-		return fmt.Errorf("platform %q: runtime.mode %q invalid (want \"process\" or \"command\")", key, p.Runtime.Mode)
+		return fmt.Errorf("platform %q: runtime.mode %q invalid (want \"process\", \"command\" or \"external\")", key, p.Runtime.Mode)
 	}
 	if p.Install != nil {
 		if len(p.Install.Script) > 0 && (p.Install.Fetch != nil || len(p.Install.Run) > 0) {

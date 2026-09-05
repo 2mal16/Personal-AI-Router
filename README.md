@@ -221,6 +221,8 @@ Each entry assumes the ones before it.
    most users need.
 3. **[Managing engines](docs/engine-lifecycle.mdx)** — install, start, stop,
    update, and uninstall engines; what PAIR restores after you quit or relaunch.
+   Alongside it, **[Using an existing llama-swap server](docs/llama-swap.mdx)**
+   covers an engine PAIR routes to but does not manage.
 4. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
    terminal, for a machine with no desktop environment. Skip it if every machine
    you run has a desktop.

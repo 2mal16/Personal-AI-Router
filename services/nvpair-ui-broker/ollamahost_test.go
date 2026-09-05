@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"nvpair-shared/appdir"
 	"nvpair-shared/errors"
 )
 
@@ -126,21 +125,14 @@ func TestReservedOllamaHostAliasPort(t *testing.T) {
 }
 
 func TestConfiguredLMStudioProxyPort(t *testing.T) {
-	isolateOllamaHostTestConfig(t)
-	if got := configuredLMStudioProxyPort(); got != managedLMStudioFacadePort {
+	path := filepath.Join(t.TempDir(), lmstudioProxyPortFile)
+	if got := readLMStudioProxyPort(path); got != managedLMStudioFacadePort {
 		t.Fatalf("missing persisted port = %d, want default %d", got, managedLMStudioFacadePort)
-	}
-	path, err := appdir.Path(lmstudioProxyPortFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(`{"port":1240}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := configuredLMStudioProxyPort(); got != 1240 {
+	if got := readLMStudioProxyPort(path); got != 1240 {
 		t.Fatalf("persisted port = %d, want 1240", got)
 	}
 }

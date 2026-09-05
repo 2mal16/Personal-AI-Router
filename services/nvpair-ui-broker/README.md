@@ -562,3 +562,15 @@ Attach to a pre-existing endpoint:
 - **AuthN / AuthZ.** Transport security relies on the parent's pipe / socket ACL. There is no per-message token.
 - **HTTP / WebSocket transport.** JSON-RPC over stdio or pipe only — no web bridge yet. Likely lives in a separate component if/when added.
 - **Automatic workload baseline on subscribe.** `workloads:subscribe` starts only the live stream; clients explicitly request `workloads:get-initial` after subscribing and merge overlapping records. The broker persists bounded terminal history, while active state is rebuilt from live workload reconciliation rather than treated as durable across a full process-tree restart.
+
+### External llama-swap
+
+The OpenAI advertiser also queries `llama-swap` engine status and model inventory.
+It advertises the shared OpenAI proxy when either LM Studio or llama-swap is
+healthy, and supplies independent `node/set-local-backend` snapshots including
+model IDs. It preserves the `engine:models` distinction between an empty
+inventory and an unqueryable one: a sweep that could not read an engine's models
+omits the field so the proxy keeps its last-known inventory, rather than
+reporting an empty one and stalling named inference. No new worker or inference listener is launched. Engine status relays
+preserve `externally_managed`; external engine process commands are rejected by
+the engine-manager. See [llama-swap setup](../../docs/llama-swap.mdx).

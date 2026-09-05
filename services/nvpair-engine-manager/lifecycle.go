@@ -88,6 +88,9 @@ func (e *Executor) StartWith(ctx context.Context, engine string, opts startOpts)
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	st.opMu.Lock()
 	defer st.opMu.Unlock()
 	if err := e.doStart(ctx, st, engine, opts); err != nil {
@@ -354,6 +357,9 @@ func (e *Executor) watch(st *engineState, engine string, proc *managedProc) {
 func (e *Executor) Stop(engine string) error {
 	st, err := e.state(engine)
 	if err != nil {
+		return err
+	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
 		return err
 	}
 	st.opMu.Lock()
@@ -679,6 +685,9 @@ func (e *Executor) Restart(ctx context.Context, engine string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	st.opMu.Lock()
 	defer st.opMu.Unlock()
 	if err := e.doStop(st, engine); err != nil {
@@ -711,6 +720,9 @@ func (e *Executor) StopAll() {
 	for _, n := range names {
 		st, err := e.state(n)
 		if err != nil {
+			continue
+		}
+		if st.plat.Runtime.modeOrDefault() == "external" {
 			continue
 		}
 		wg.Add(1)

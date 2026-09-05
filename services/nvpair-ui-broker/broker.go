@@ -1462,7 +1462,7 @@ func (b *Broker) proxyForEngine(engine string) *proxyProcess {
 	switch engine {
 	case "ollama":
 		return b.getProxy()
-	case "lmstudio":
+	case "lmstudio", "llama-swap":
 		return b.getLMStudioProxy()
 	default:
 		return nil

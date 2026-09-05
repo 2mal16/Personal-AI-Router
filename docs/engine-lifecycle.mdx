@@ -26,6 +26,14 @@ one compatible engine that is:
 A request only goes to a machine when that machine is online, an eligible
 engine is running there, and the requested model is available on it.
 
+An **externally managed** engine meets those requirements without PAIR owning
+it: PAIR observes the server, lists its models, and routes to it, while the
+server's processes, models, and installation stay under whatever already runs
+them. Everything in this page about installing, starting, stopping, updating,
+uninstalling, and downloading or unloading models applies only to the engines
+PAIR manages. See [Using an existing llama-swap server](llama-swap.mdx) for the
+one this build ships.
+
 ## Managing Engines
 
 You can manage the engine using the UI or the terminal.
@@ -223,6 +231,7 @@ These habits avoid the most common engine problems:
 These pages cover the surrounding workflows:
 
 - [Getting started](getting-started.mdx)
+- [Using an existing llama-swap server](llama-swap.mdx)
 - [Terminal interface](terminal-interface.mdx)
 - [Troubleshooting](troubleshooting.mdx)
 - [Overview](overview.mdx)

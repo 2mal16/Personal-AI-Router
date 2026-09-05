@@ -4,12 +4,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"nvpair-shared/cors"
@@ -24,35 +27,61 @@ const engineIdentityProbeHeader = "X-NVPAIR-Engine-Identity-Probe"
 // engine, never re-routed to a peer, so the ingress path is strictly terminal
 // and cannot recurse or amplify.
 type localBackend struct {
-	Engine  string `json:"engine"`
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Healthy bool   `json:"healthy"`
+	Engine  string   `json:"engine"`
+	Host    string   `json:"host"`
+	Port    int      `json:"port"`
+	Healthy bool     `json:"healthy"`
+	Models  []string `json:"models,omitempty"`
 }
 
 // setLocalBackend records (or, with a zero port / unhealthy flag, effectively
 // clears) the local engine the ingress serves.
 func (p *Proxy) setLocalBackend(b localBackend) {
 	p.backendMu.Lock()
-	p.backend = b
+	if p.engines == nil {
+		p.engines = make(map[string]localBackend)
+	}
+	if b.Engine == "" {
+		b.Engine = "lmstudio"
+	}
+	// Port/liveness-only updates must not erase a known model inventory.
+	if b.Models == nil {
+		if previous, ok := p.engines[b.Engine]; ok && previous.Port == b.Port {
+			b.Models = previous.Models
+		} else {
+			b.Models = []string{}
+		}
+	}
+	p.engines[b.Engine] = b
 	p.backendMu.Unlock()
 }
 
-// localBackendTarget returns the loopback URL of the current local engine, and
-// false when none is set/healthy (the ingress then answers 503 rather than
-// forwarding). The host defaults to 127.0.0.1 and is always loopback.
-func (p *Proxy) localBackendTarget() (*url.URL, bool) {
+// localEngineCandidates returns the loopback engines this machine has
+// configured, in preference order, restricted to the ones whose inventory
+// advertises model when one is named: LM Studio wins a duplicate model ID and
+// llama-swap stays independently routable. An engine that is unset, has no
+// port, or is unhealthy is not a candidate, so an empty result is what makes
+// the ingress answer 503 rather than forward. The host defaults to 127.0.0.1
+// and is always loopback.
+func (p *Proxy) localEngineCandidates(model string) []candidate {
 	p.backendMu.RLock()
-	b := p.backend
-	p.backendMu.RUnlock()
-	if b.Port <= 0 || !b.Healthy {
-		return nil, false
+	defer p.backendMu.RUnlock()
+	var out []candidate
+	for _, engine := range []string{"lmstudio", "llama-swap"} {
+		b, ok := p.engines[engine]
+		if !ok || b.Port <= 0 || !b.Healthy {
+			continue
+		}
+		if model != "" && b.Models != nil && !slices.Contains(b.Models, model) {
+			continue
+		}
+		host := b.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		out = append(out, candidate{engine: engine, url: &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(b.Port))}})
 	}
-	host := b.Host
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	return &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(b.Port))}, true
+	return out
 }
 
 // handlePlain is the plaintext personality: it accepts requests only from
@@ -103,12 +132,25 @@ func (p *Proxy) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 			"client certificate is not a pinned member of this node's cluster")
 		return
 	}
-	target, ok := p.localBackendTarget()
-	if !ok {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+		_, _ = p.serveModelList(w, r, p.localEngineCandidates(""))
+		return
+	}
+	// Only an inference route needs its model, and reading it means buffering
+	// the body. Everything else streams to the engine as it always has.
+	model := ""
+	if isInferenceRequest(r.Method, r.URL.Path) {
+		body, parsed := bufferBodyAndModel(r)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		model = parsed
+	}
+	candidates := p.localEngineCandidates(model)
+	if len(candidates) == 0 {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",
 			"no local inference backend is available on this node")
 		return
 	}
+	target := candidates[0].url
 	slog.Debug("cluster ingress forwarding to local backend",
 		"peer", peer, "method", r.Method, "path", r.URL.Path, "target", target.Host)
 	p.reverseProxyToLocal(w, r, target)

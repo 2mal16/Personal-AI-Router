@@ -27,12 +27,13 @@ const (
 // EngineStatus is the snapshot returned by engine:status and
 // engine:get-installed.
 type EngineStatus struct {
-	Engine      string `json:"engine"`
-	DisplayName string `json:"display_name"`
-	Installed   bool   `json:"installed"`
-	Running     bool   `json:"running"`
-	Healthy     bool   `json:"healthy"`
-	Port        int    `json:"port,omitempty"`
+	ExternallyManaged bool   `json:"externally_managed,omitempty"`
+	Engine            string `json:"engine"`
+	DisplayName       string `json:"display_name"`
+	Installed         bool   `json:"installed"`
+	Running           bool   `json:"running"`
+	Healthy           bool   `json:"healthy"`
+	Port              int    `json:"port,omitempty"`
 }
 
 // engineState is the per-engine runtime state.

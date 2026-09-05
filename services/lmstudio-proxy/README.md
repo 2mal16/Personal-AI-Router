@@ -442,3 +442,30 @@ The proxy shuts down gracefully on any of:
 ## Discovery
 
 The proxy does not browse mDNS. On startup it subscribes to the broker's discovery relay for `lm` (LM Studio) nodes (`discovery:subscribe {services:[lm]}`). Targets then arrive as `discovery:nodes` notifications carrying the relay's full filtered node set, and each snapshot replaces the routing overlay wholesale — a departed node is simply absent from the next one — while the diff against the previous overlay is what produces the `node/discovered`, `node/updated`, and `node/removed` notifications. User-added manual nodes are merged on top. Nodes are keyed by the discovery record's stable per-host UUID, so routing survives a machine being renamed. The single `_nvpair-node` browse that feeds the relay lives in the `nvpair-node-scanner` daemon (see its README) — this proxy is a pure consumer of the resulting routing set.
+
+## Shared OpenAI-compatible engines
+
+This proxy also fronts externally managed llama-swap. The existing binary,
+relay namespace, and `lm` discovery service identify the shared OpenAI listener.
+`node/set-local-backend` stores endpoints independently by `engine` (`lmstudio`
+or `llama-swap`) and uses `models`, the broker's current inventory, to authorize
+model-bearing inference. Callers must supply that inventory; a port-only endpoint
+cannot serve a named model until its inventory is provided. This is a breaking
+contract change. Clearing one endpoint leaves the other intact.
+
+An explicit empty array means no eligible models. Omitting `models` means
+"unchanged": the endpoint keeps the inventory it already has as long as its port
+is the same, so a caller whose own inventory query failed must omit the field
+rather than send `[]`, which would take every model on the node out of service.
+A port change with no inventory starts empty, because the endpoint is a
+different server.
+
+Node notifications add `modelsByEngine` so clients can identify which engines the
+shared proxy actually fronts.
+
+Self and authenticated peer inference select a local endpoint by model ID;
+LM Studio wins duplicate IDs. Peer `/v1/models` aggregates both local endpoints.
+The local `/v1/models` aggregates eligible nodes. Workloads carry the chosen
+engine, and `/v1/responses` participates in model-based routing alongside chat,
+completions, and embeddings. Existing streaming, cancellation, trust checks,
+timeouts, and node-wide scheduling apply to both engines.

@@ -331,6 +331,10 @@ func configuredLMStudioProxyPort() int {
 	if err != nil {
 		return managedLMStudioFacadePort
 	}
+	return readLMStudioProxyPort(path)
+}
+
+func readLMStudioProxyPort(path string) int {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return managedLMStudioFacadePort

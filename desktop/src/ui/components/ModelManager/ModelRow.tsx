@@ -42,6 +42,7 @@ function ModelRowInner({
     const isLoaded = model.status === 'loaded'
 
     const actionItems = useMemo(() => {
+        if (capabilities.externallyManaged) return []
         const items: { id: string; children: string; disabled?: boolean; danger?: boolean }[] = []
         // A command is already in flight for this model -- lock the whole menu so
         // the user cannot fire a second conflicting op before it resolves.
@@ -68,6 +69,7 @@ function ModelRowInner({
         return items
     }, [
         capabilities.hasEject,
+        capabilities.externallyManaged,
         capabilities.hasDeleteModel,
         isLoaded,
         isRunning,

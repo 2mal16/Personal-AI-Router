@@ -130,3 +130,7 @@ go test ./...
 - [`../nvpair-workload-manager/README.md`](../nvpair-workload-manager/README.md)
   — where workload state originates
 - [`../VERSIONING.md`](../VERSIONING.md) — SemVer bump rules
+
+The scheduler also emits the `llama-swap` engine priority view. It uses the same
+node-wide ranking as the other engines because GPU resources are shared; the
+broker routes this view to the shared OpenAI-compatible proxy.

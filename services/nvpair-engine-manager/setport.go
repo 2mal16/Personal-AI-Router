@@ -39,6 +39,19 @@ func (e *Executor) SetPort(ctx context.Context, engine string, port int) (Engine
 	st.opMu.Lock()
 	defer st.opMu.Unlock()
 
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		if err := e.persistPort(engine, port); err != nil {
+			return EngineStatus{}, err
+		}
+		st.mu.Lock()
+		st.port = port
+		st.plat.Runtime.Port = port
+		st.mu.Unlock()
+		e.reconcilePresence(ctx, engine, st, false, port, false)
+		e.emitState(engine)
+		return e.snapshot(engine, st), nil
+	}
+
 	st.mu.Lock()
 	wasRunning := st.running
 	adopted := st.adopted

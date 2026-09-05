@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -125,12 +126,13 @@ func (e *Executor) snapshot(engine string, st *engineState) EngineStatus {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return EngineStatus{
-		Engine:      engine,
-		DisplayName: st.manifest.DisplayName,
-		Installed:   st.installed,
-		Running:     st.running,
-		Healthy:     st.healthy,
-		Port:        st.port,
+		ExternallyManaged: st.plat.Runtime.modeOrDefault() == "external",
+		Engine:            engine,
+		DisplayName:       st.manifest.DisplayName,
+		Installed:         st.installed,
+		Running:           st.running,
+		Healthy:           st.healthy,
+		Port:              st.port,
 	}
 }
 
@@ -144,6 +146,20 @@ func (e *Executor) snapshot(engine string, st *engineState) EngineStatus {
 // allowWhileStopping is true only for an explicit Start. Passive status checks
 // must not undo a deliberate OFF by re-adopting a service behind st.stopping.
 func (e *Executor) reconcilePresence(ctx context.Context, engine string, st *engineState, pathInstalled bool, port int, allowWhileStopping bool) presenceResult {
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		healthy := e.probe(ctx, st.plat.Runtime.Ready, port)
+		st.mu.Lock()
+		changed := st.running != healthy || st.healthy != healthy || st.port != port
+		st.installed = true
+		st.running = healthy
+		st.healthy = healthy
+		st.port = port
+		st.mu.Unlock()
+		if changed {
+			e.emitState(engine)
+		}
+		return presenceResult{Identified: healthy, Occupied: healthy}
+	}
 	st.mu.Lock()
 	running := st.running
 	adopted := st.adopted
@@ -261,4 +277,12 @@ func (e *Executor) emitState(engine string) {
 		return
 	}
 	e.notify("engine:state-changed", e.snapshot(engine, st))
+}
+
+// External engines are observed, never controlled by PAIR.
+func rejectExternalLifecycle(st *engineState, engine string) error {
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		return fmt.Errorf("engine %q is externally managed; manage its process and models in its own application", engine)
+	}
+	return nil
 }

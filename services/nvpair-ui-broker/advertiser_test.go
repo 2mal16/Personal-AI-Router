@@ -57,18 +57,20 @@ func TestLMStudioFallbackNeverAdvertisesItsProxy(t *testing.T) {
 	}
 	go proxy.peer.Serve(nil, nil)
 
-	localBackend := make(chan proxyLocalBackend, 1)
+	localBackend := make(chan proxyLocalBackend, 2)
 	go func() {
 		codec := NewCodec(proxyServer)
-		msg, err := codec.Read()
-		if err != nil {
-			return
+		for {
+			msg, err := codec.Read()
+			if err != nil {
+				return
+			}
+			var got proxyLocalBackend
+			if json.Unmarshal(msg.Params, &got) == nil {
+				localBackend <- got
+			}
+			_ = codec.Respond(msg.ID, map[string]bool{"ok": true})
 		}
-		var got proxyLocalBackend
-		if json.Unmarshal(msg.Params, &got) == nil {
-			localBackend <- got
-		}
-		_ = codec.Respond(msg.ID, map[string]bool{"ok": true})
 	}()
 
 	b := &Broker{regCache: relay.NewRegistrationCache()}
@@ -144,5 +146,66 @@ func TestOllamaFacadeIsPendingBackend(t *testing.T) {
 	b.setProxy(&proxyProcess{ready: true, port: managedOllamaFacadePort})
 	if !b.ollamaFacadeIsPendingBackend() {
 		t.Fatal("recovery must keep probes blocked until the proxy vacates 11434")
+	}
+}
+
+// TestSetOpenAIEngineOmitsUnknownInventory guards the "unknown is not empty"
+// rule on the shared OpenAI proxy's node/set-local-backend. The proxy refuses a
+// named model that its stored inventory does not list, so sending [] whenever
+// engine:models happens to fail would take every model on this node out of
+// service until the next successful sweep. A known-empty inventory still has to
+// travel, because that one really does mean "serves nothing".
+func TestSetOpenAIEngineOmitsUnknownInventory(t *testing.T) {
+	proxyClient, proxyServer := net.Pipe()
+	defer proxyClient.Close()
+	defer proxyServer.Close()
+	proxy := &proxyProcess{peer: NewPeer(NewCodec(proxyClient)), ready: true, port: defaultLMStudioPort}
+	go proxy.peer.Serve(nil, nil)
+
+	params := make(chan map[string]json.RawMessage, 4)
+	go func() {
+		codec := NewCodec(proxyServer)
+		for {
+			msg, err := codec.Read()
+			if err != nil {
+				return
+			}
+			var got map[string]json.RawMessage
+			if json.Unmarshal(msg.Params, &got) == nil {
+				params <- got
+			}
+			_ = codec.Respond(msg.ID, map[string]bool{"ok": true})
+		}
+	}()
+
+	b := &Broker{regCache: relay.NewRegistrationCache()}
+	b.setLMStudioProxy(proxy)
+
+	next := func() map[string]json.RawMessage {
+		t.Helper()
+		select {
+		case got := <-params:
+			return got
+		case <-time.After(2 * time.Second):
+			t.Fatal("proxy did not receive node/set-local-backend")
+			return nil
+		}
+	}
+
+	b.setOpenAIEngine("llama-swap", 10000, true, []string{"chat-model"}, true)
+	if got := next(); string(got["models"]) != `["chat-model"]` {
+		t.Fatalf("known inventory sent %s, want [\"chat-model\"]", got["models"])
+	}
+	b.setOpenAIEngine("llama-swap", 10000, true, nil, true)
+	if got := next(); string(got["models"]) != `[]` {
+		t.Fatalf("known empty inventory sent %s, want []", got["models"])
+	}
+	b.setOpenAIEngine("llama-swap", 10000, true, nil, false)
+	got := next()
+	if raw, ok := got["models"]; ok {
+		t.Fatalf("unknown inventory sent models = %s, want the field omitted", raw)
+	}
+	if string(got["engine"]) != `"llama-swap"` || string(got["port"]) != "10000" || string(got["healthy"]) != "true" {
+		t.Fatalf("endpoint fields lost when the inventory is unknown: %v", got)
 	}
 }

@@ -3,7 +3,11 @@
 
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // TestPullParamsSendsBothKeys guards the LM Studio pull fix: the pull params
 // must carry the model under BOTH "name" (Ollama's /api/pull body key) and
@@ -27,5 +31,25 @@ func TestPullParamsSendsBothKeys(t *testing.T) {
 	}
 	if inner["model"] != "owner/model" {
 		t.Fatalf(`params["model"] = %q, want "owner/model" (LM Studio reads this key)`, inner["model"])
+	}
+}
+
+// TestExternalEngineControlsKeepNavigationAvailable guards the external-engine
+// rule in the engines view: lifecycle keys report that the engine is managed
+// elsewhere instead of calling the service, and its shortcuts disappear from
+// help, while table navigation stays with the table. SetSize first, because the
+// table panics when rows arrive before columns.
+func TestExternalEngineControlsKeepNavigationAvailable(t *testing.T) {
+	v := newEnginesView(nil)
+	v.SetSize(80, 24)
+	v.merge(engineStatus{Engine: "llama-swap", DisplayName: "llama-swap", ExternallyManaged: true, Installed: true})
+	if _, handled := v.handleAction(tea.KeyMsg{Type: tea.KeyDown}); handled {
+		t.Fatal("external controls swallowed navigation")
+	}
+	if cmd, handled := v.handleAction(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}); !handled || cmd != nil {
+		t.Fatal("external engine start must not call the service")
+	}
+	if len(v.Help()) != 0 {
+		t.Fatal("external engine exposes lifecycle shortcuts")
 	}
 }
