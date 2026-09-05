@@ -5,6 +5,20 @@ import { EngineType } from '@/shared/types/engines'
 import type { EngineCaps } from '@/ui/types/engine-manifest'
 
 export const EngineCapabilities: Record<EngineType, EngineCaps> = {
+    'llama-swap': {
+        externallyManaged: true,
+        hasExpiry: false,
+        hasEject: false,
+        hasInstall: [],
+        hasEnginePort: true,
+        hasInstallPath: false,
+        hasProxyWebUI: false,
+        hasPreferredNode: false,
+        hasCrashAlert: false,
+        hasModelSearchOnlyWhenRunning: true,
+        modelOpsWhenStopped: false,
+        hasDeleteModel: false
+    },
     ollama: {
         // Ollama has no model keep-alive/expiry UI; unload uses unload_model
         // (POST /api/generate with keep_alive: 0). See docs/services-parity.md#models.

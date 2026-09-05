@@ -201,6 +201,13 @@ From the **Engines** tab (6), select an engine with `j` / `k`, then:
 Pressing `p` opens a prompt. Type the model name, for example `qwen4:12b`, and
 press `enter`. Progress appears on the status line.
 
+An engine labelled `(external)` is managed outside PAIR — see
+[Using an existing llama-swap server](llama-swap.mdx). None of the keys above act
+on it: each one reports that its processes and models belong to its own
+application, and quitting the terminal interface leaves it running. Change the
+port PAIR connects to from the desktop application or a manifest override, not
+from here.
+
 A node can serve a request only when it is online, a compatible engine is
 running, and the requested model is present on that node. To route across several
 machines, download the same model on each.
@@ -214,7 +221,8 @@ engine, and state.
 
 The **Proxies** tab (4) shows each proxy's listening port and whether it is
 routing automatically (`selected=auto`) or pinned to one node. Press `g` to
-switch between the two engines, `enter` to pin the highlighted upstream, and `a`
+switch between the two proxies — Ollama, and the OpenAI-compatible one shared by
+LM Studio and llama-swap — `enter` to pin the highlighted upstream, and `a`
 to return to automatic routing. Leave it on automatic unless you are
 deliberately testing one node.
 
@@ -258,6 +266,8 @@ It is an operations tool, not a full replacement for the desktop application:
 These documents cover related topics:
 
 - [Getting Started](getting-started.mdx) — first-run setup and endpoints
+- [Using an existing llama-swap server](llama-swap.mdx) — the externally managed
+  engine and what the terminal interface will not do to it
 - [Ports](getting-started.mdx#7-connecting-your-agents-and-port-information) —
   which ports to use and how to change them
 - [Troubleshooting](troubleshooting.mdx)

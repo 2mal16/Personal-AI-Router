@@ -88,3 +88,9 @@ cd nvpair-tui
 go build ./...
 go test ./...
 ```
+
+Externally managed llama-swap appears in Engines with an `(external)` label.
+Status reports connection health. Process and model lifecycle actions are
+unavailable, and closing the TUI leaves llama-swap running. Configure a nondefault
+connection port through the local desktop or a manifest override as described in
+[llama-swap setup](../../docs/llama-swap.mdx).

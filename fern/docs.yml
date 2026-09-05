@@ -34,6 +34,9 @@ navigation:
       - page: Engine Settings
         path: ../docs/engine-settings.mdx
         slug: engine-settings
+      - page: Using an existing llama-swap server
+        path: ../docs/llama-swap.mdx
+        slug: llama-swap
       - page: Terminal Interface
         path: ../docs/terminal-interface.mdx
         slug: terminal-interface

@@ -18,6 +18,7 @@ import type { EngineCommandType } from '@/shared/types/engine-api'
 
 import { ConfirmModal } from '@/ui/components/ConfirmModal'
 import { ModelSection } from '@/ui/components/ModelManager/ModelSection'
+import { EngineCapabilities } from '@/ui/constants/engine-capabilities'
 import { BackendHeader } from './BackendHeader'
 import { BackendFooter } from './BackendFooter'
 import { BackendUpdateBanner } from './BackendUpdateBanner'
@@ -200,7 +201,7 @@ export function BackendRow({
             <BackendFooter
                 backend={displayBackend}
                 targetOs={targetOs}
-                showUninstall={isLocalNode}
+                showUninstall={isLocalNode && !EngineCapabilities[backend.type].externallyManaged}
                 disabled={controlsDisabled}
                 onUninstall={requestUninstall}
             />

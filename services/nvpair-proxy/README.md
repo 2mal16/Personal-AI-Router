@@ -222,6 +222,39 @@ reports one.
 Closing stdin (observed as EOF) drains the HTTP server and exits. The broker
 owns the lifecycle: `shutdown` relayed from a client is refused.
 
+## Several local engines behind one facade
+
+An engine that speaks a facade's dialect can ride on it instead of getting a
+facade and port of its own. Today the `lmstudio` facade also fronts an
+externally managed **llama-swap** (OpenAI-compatible): clients keep one
+endpoint, and the facade's `lm` discovery service advertises it for both. The
+profile's `LocalEngines` lists them in routing preference.
+
+`node/set-local-backend`, addressed to the facade (`lmstudio:node/set-local-backend`),
+stores an endpoint per `engine` (`lmstudio` or `llama-swap`; an empty name means
+the facade's own). A name the facade does not host is rejected, as is a
+non-loopback host. Clearing one endpoint leaves the others intact.
+
+`models` is the broker's current inventory for that engine and decides which
+endpoint answers a named model:
+
+- An explicit empty array means no eligible models. Omitting `models` means
+  "unchanged": the endpoint keeps its inventory while its port is the same, so a
+  caller whose own inventory query failed must omit the field rather than send
+  `[]`, which would take every model on the node out of service. A port change
+  with no inventory starts empty, because it is a different server.
+- Self and authenticated peer inference pick the local endpoint by model id;
+  LM Studio wins a duplicate id. `GET /v1/models` (local ingress and local
+  routing) aggregates every eligible endpoint.
+- Node notifications carry `modelsByEngine`, and each workload's `engine` names
+  the endpoint it was dispatched to. The engine is fixed when the workload is
+  created (the broker's workload store keys on it), so a failover to the other
+  local engine does not re-label it.
+- `/v1/responses` is routed by model like chat, completions and embeddings.
+
+A facade that fronts only its own engine (Ollama) keeps no inventory, does not
+filter by model, and forwards model lists untouched.
+
 ## Adding an engine
 
 Add one entry to `nvpair-shared/engines` for the cross-process identity, one to

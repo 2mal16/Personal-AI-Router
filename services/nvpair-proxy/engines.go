@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"nvpair-shared/engines"
+	"nvpair-shared/noderec"
 )
 
 // routeRole classifies an inbound request path. It carries the HTTP method
@@ -115,6 +116,37 @@ type engineProfile struct {
 	// claim one names that variable. Gating on this makes the scoping
 	// enforced rather than left to the broker's restraint in passing the flag.
 	SupportsHostAlias bool
+
+	// LocalEngines names every loopback engine this facade fronts, in routing
+	// preference order, when that is more than the facade's own engine. An
+	// externally managed engine that speaks this facade's dialect (llama-swap
+	// is OpenAI-compatible) rides here rather than getting a facade and a port
+	// of its own: clients keep one endpoint, and the broker addresses its
+	// node/set-local-backend to this facade with the engine named in the
+	// payload. Empty means the facade fronts only its own engine.
+	LocalEngines []string
+}
+
+// localEngineNames returns the engines this facade fronts locally, preferred
+// first. It is never empty: a profile that lists none fronts its own engine.
+func (p engineProfile) localEngineNames() []string {
+	if len(p.LocalEngines) == 0 {
+		return []string{p.Name}
+	}
+	return p.LocalEngines
+}
+
+// nodeModels is the model inventory a peer advertises for this facade: its own
+// engine's models plus those of every other engine the facade fronts, so a
+// model only llama-swap serves still makes the node an eligible owner.
+func (p engineProfile) nodeModels(n noderec.DirectoryNode) []string {
+	models := append([]string(nil), n.EngineModels(p.Name)...)
+	for _, name := range p.localEngineNames() {
+		if name != p.Name {
+			models = append(models, n.ModelsByEngine[name]...)
+		}
+	}
+	return models
 }
 
 // ollamaBaseRoutes is the engine-specific surface that Ollama exposes before
@@ -132,6 +164,9 @@ var ollamaBaseRoutes = []route{
 // before the shared compatibility routes are added.
 var lmStudioBaseRoutes = []route{
 	{Path: "/v1/models", Role: roleModelListOpenAIGET},
+	// Served by llama-swap, which shares this facade. Tracked as inference so
+	// the workload carries its engine and the scheduler sees the load.
+	{Path: "/v1/responses", Role: roleInferencePOST},
 }
 
 // openAIInferenceRoutes is the OpenAI-compatible inference surface.
@@ -168,6 +203,9 @@ func buildProfiles() []engineProfile {
 			StandalonePort: 1234,
 			Routes:         lmStudioRoutes,
 			ModelNaming:    exactID,
+			// LM Studio wins a duplicate model id; llama-swap stays reachable
+			// for the models only it serves.
+			LocalEngines: []string{"lmstudio", "llama-swap"},
 			// 1235 is where engine-manager runs a managed LM Studio, so a
 			// proxy that restored it would sit on the engine's own port. The
 			// stored value predates the current default of 1234.

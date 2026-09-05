@@ -1148,7 +1148,7 @@ class ModularSupervisor {
         this.firstOpenEngineStartDone = true
 
         for (const status of state.getEngineInitialState().statuses) {
-            if (status.nodeId !== selfId) continue
+            if (status.nodeId !== selfId || status.engineType === 'llama-swap') continue
             if (status.processStatus !== 'stopped' && status.processStatus !== 'running') continue
 
             const engine = engineManagerName(status.engineType)
@@ -1641,6 +1641,13 @@ class ModularSupervisor {
             // loaded set so the local node's model rows reflect residency at once,
             // ahead of the next discovery model-refresh sweep.
             getModularBridgeState().applyLocalLoadedModels(parseLoadedByEngine(notification.params))
+            const snapshot = objectValue(objectValue(notification.params)?.models)
+            const inventory = objectValue(snapshot?.modelsByEngine)?.['llama-swap']
+            if (Array.isArray(inventory)) {
+                const names = inventory.filter((name): name is string => typeof name === 'string')
+                const generation = this.beginModelRefresh('llama-swap')
+                this.commitModelInventory('llama-swap', names, generation)
+            }
             return
         }
         if (notification.method === 'engine:install-progress') {
@@ -2163,6 +2170,8 @@ class ModularSupervisor {
      * restart (which clears the proxy's manual set) via the `<proxy>:ready` hook.
      */
     private async reconcileLocalNodeBridge(engine: ProxyEngine): Promise<void> {
+        // External engines share the broker-owned OpenAI proxy and its model routing.
+        if (engine === 'llama-swap') return
         if (!this.processes.has('broker')) return
         const selfId = getModularBridgeState().getSelfId()
         // selfId not resolved yet — reconcile re-runs on the next trigger

@@ -538,6 +538,10 @@ One port per facade, demultiplexed on the connection's first byte:
 - **Cluster mTLS** when `--cluster-dir` shows this node is a member: a peer
   whose client certificate matches a local pin is forwarded straight to the
   local engine reported by `node/set-local-backend`, never re-routed onward.
+  A facade may front several local engines (the `lmstudio` facade also fronts
+  llama-swap); the engine named in the payload selects the endpoint, and the
+  per-engine model inventory chooses between them. See README, "Several local
+  engines behind one facade".
 
 Membership and pins are re-derived per request and on a watch, so joining or
 leaving a cluster needs no restart.

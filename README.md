@@ -224,6 +224,8 @@ Each entry assumes the ones before it.
 4. **[Engine settings](docs/engine-settings.mdx)** — change an engine's ports and
    its launch command, on this machine or a paired one, and give a browser access
    to your models.
+   Alongside it, **[Using an existing llama-swap server](docs/llama-swap.mdx)**
+   covers an engine PAIR routes to but does not manage.
 5. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
    terminal, for a machine with no desktop environment. Skip it if every machine
    you run has a desktop.

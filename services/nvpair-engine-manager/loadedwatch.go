@@ -55,6 +55,7 @@ func (e *Executor) watchLoaded(ctx context.Context) {
 	defer t.Stop()
 
 	var prev map[string][]string
+	var available map[string][]string
 	seeded := false
 	for {
 		select {
@@ -65,6 +66,13 @@ func (e *Executor) watchLoaded(ctx context.Context) {
 		}
 		changed, next, res := e.sweepLoaded(ctx, prev)
 		prev = next
+		for _, name := range changedEngines(available, res.ByEngine) {
+			st, err := e.state(name)
+			if err == nil && st.plat.Runtime.modeOrDefault() == "external" {
+				changed = append(changed, name)
+			}
+		}
+		available = res.ByEngine
 		if !seeded {
 			seeded = true
 			continue // first sweep only seeds the baseline

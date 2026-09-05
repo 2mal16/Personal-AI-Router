@@ -4,13 +4,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 )
 
@@ -23,21 +26,15 @@ const engineIdentityProbeHeader = "X-NVPAIR-Engine-Identity-Probe"
 // engine, never re-routed to a peer, so the ingress path is strictly terminal
 // and cannot recurse or amplify.
 type localBackend struct {
-	Engine  string `json:"engine"`
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Healthy bool   `json:"healthy"`
-}
-
-// currentLocalBackend snapshots the configured local engine.
-func (f *facade) currentLocalBackend() localBackend {
-	f.backendMu.RLock()
-	defer f.backendMu.RUnlock()
-	return f.backend
+	Engine  string   `json:"engine"`
+	Host    string   `json:"host"`
+	Port    int      `json:"port"`
+	Healthy bool     `json:"healthy"`
+	Models  []string `json:"models,omitempty"`
 }
 
 // setLocalBackend records (or, with a zero port / unhealthy flag, effectively
-// clears) the local engine this facade's ingress serves.
+// clears) the named local engine this facade's ingress serves.
 //
 // A non-loopback host is rejected rather than stored. The ingress forwards a
 // pin-authenticated peer's request straight here without consulting discovery,
@@ -45,30 +42,68 @@ func (f *facade) currentLocalBackend() localBackend {
 // whoever can reach the control channel. The broker only ever sends 127.0.0.1;
 // this is the same defence-in-depth re-validation setLoopbackAlias performs on
 // the alias the broker sends it.
+//
+// An empty b.Engine means the facade's own engine. A name the profile does not
+// host is rejected, so one facade can never be handed another's backend.
 func (f *facade) setLocalBackend(b localBackend) error {
 	if b.Host != "" && !isLoopbackHost(b.Host) {
 		return fmt.Errorf("local backend host %q is not loopback", b.Host)
 	}
+	if b.Engine == "" {
+		b.Engine = f.profile.Name
+	}
+	if !slices.Contains(f.profile.localEngineNames(), b.Engine) {
+		return fmt.Errorf("local backend engine %q is not served by the %s facade", b.Engine, f.profile.Name)
+	}
 	f.backendMu.Lock()
 	defer f.backendMu.Unlock()
-	f.backend = b
+	if f.localEngines == nil {
+		f.localEngines = make(map[string]localBackend)
+	}
+	// Port/liveness-only updates must not erase a known model inventory. Only a
+	// facade that hosts several engines keeps one: with a single engine every
+	// request goes to it, and an empty inventory must not read as "serves
+	// nothing".
+	if b.Models == nil && len(f.profile.localEngineNames()) > 1 {
+		if previous, ok := f.localEngines[b.Engine]; ok && previous.Port == b.Port {
+			b.Models = previous.Models
+		} else {
+			b.Models = []string{}
+		}
+	}
+	f.localEngines[b.Engine] = b
 	return nil
 }
 
-// localBackendTarget returns the loopback URL of the current local engine, and
-// false when none is set/healthy (the ingress then answers 503 rather than
-// forwarding). The host defaults to 127.0.0.1, and setLocalBackend refuses to
-// store anything that is not loopback, so this is always a loopback target.
-func (f *facade) localBackendTarget() (*url.URL, bool) {
-	b := f.currentLocalBackend()
-	if b.Port <= 0 || !b.Healthy {
-		return nil, false
+// localEngineCandidates returns the loopback engines this machine has
+// configured for this facade, in the profile's preference order, restricted to
+// the ones whose inventory advertises model when one is named: LM Studio wins a
+// duplicate model ID and llama-swap stays independently routable. An engine
+// that is unset, has no port, or is unhealthy is not a candidate, so an empty
+// result is what makes the ingress answer 503 rather than forward. The host
+// defaults to 127.0.0.1, and setLocalBackend refuses to store anything that is
+// not loopback, so every target here is loopback.
+func (f *facade) localEngineCandidates(model string) []candidate {
+	f.backendMu.RLock()
+	defer f.backendMu.RUnlock()
+	var out []candidate
+	names := f.profile.localEngineNames()
+	multi := len(names) > 1
+	for _, engine := range names {
+		b, ok := f.localEngines[engine]
+		if !ok || b.Port <= 0 || !b.Healthy {
+			continue
+		}
+		if multi && model != "" && b.Models != nil && !slices.Contains(b.Models, model) {
+			continue
+		}
+		host := b.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		out = append(out, candidate{engine: engine, url: &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(b.Port))}})
 	}
-	host := b.Host
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	return &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(b.Port))}, true
+	return out
 }
 
 // handlePlain is the plaintext personality: it accepts requests only from
@@ -113,12 +148,29 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 			"client certificate is not a pinned member of this node's cluster")
 		return
 	}
-	target, ok := f.localBackendTarget()
-	if !ok {
+	// A facade hosting several local engines answers a model list from all of
+	// them; a single-engine facade forwards it untouched, as it always has.
+	if r.Method == http.MethodGet && len(f.profile.localEngineNames()) > 1 {
+		if role, ok := f.profile.roleFor(r.Method, r.URL.Path); ok && role.isModelList() {
+			_, _ = f.serveModelList(w, r, role, f.localEngineCandidates(""))
+			return
+		}
+	}
+	// Only an inference route needs its model, and reading it means buffering
+	// the body. Everything else streams to the engine as it always has.
+	model := ""
+	if isInferenceRequest(f.profile, r.Method, r.URL.Path) {
+		body, parsed := bufferBodyAndModel(r)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		model = f.profile.normalizeModel(parsed)
+	}
+	candidates := f.localEngineCandidates(model)
+	if len(candidates) == 0 {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",
 			"no local inference backend is available on this node")
 		return
 	}
+	target := candidates[0].url
 	slog.Debug("cluster ingress forwarding to local backend",
 		"peer", peer, "method", r.Method, "path", r.URL.Path, "target", target.Host)
 	f.reverseProxyToLocal(w, r, target)

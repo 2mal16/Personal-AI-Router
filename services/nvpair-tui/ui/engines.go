@@ -21,12 +21,13 @@ import (
 // engineStatus mirrors nvpair-engine-manager's EngineStatus snapshot, the
 // element of engine:get-installed and the engine:state-changed payload.
 type engineStatus struct {
-	Engine      string `json:"engine"`
-	DisplayName string `json:"display_name"`
-	Installed   bool   `json:"installed"`
-	Running     bool   `json:"running"`
-	Healthy     bool   `json:"healthy"`
-	Port        int    `json:"port"`
+	ExternallyManaged bool   `json:"externally_managed,omitempty"`
+	Engine            string `json:"engine"`
+	DisplayName       string `json:"display_name"`
+	Installed         bool   `json:"installed"`
+	Running           bool   `json:"running"`
+	Healthy           bool   `json:"healthy"`
+	Port              int    `json:"port"`
 }
 
 // enginesView manages local inference engines via the engine-manager
@@ -198,6 +199,10 @@ func (v *enginesView) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return cmd
 	}
 	if key.Matches(msg, engPullKey) {
+		if v.byName[v.selectedEngine()].ExternallyManaged {
+			v.status = "Configure models in the externally managed engine."
+			return nil
+		}
 		engine := v.selectedEngine()
 		if engine == "" {
 			return nil
@@ -266,6 +271,10 @@ func (v *enginesView) handleAction(msg tea.KeyMsg) (tea.Cmd, bool) {
 	default:
 		return nil, false
 	}
+	if v.byName[v.selectedEngine()].ExternallyManaged {
+		v.status = "Externally managed: configure processes and models in the engine's own application."
+		return nil, true
+	}
 	engine := v.selectedEngine()
 	if engine == "" {
 		return nil, true
@@ -300,6 +309,9 @@ func (v *enginesView) refreshRows() {
 		if e.DisplayName != "" {
 			label = e.DisplayName
 		}
+		if e.ExternallyManaged {
+			label += " (external)"
+		}
 		port := "-"
 		if e.Port != 0 {
 			port = strconv.Itoa(e.Port)
@@ -333,6 +345,9 @@ func (v *enginesView) View() string {
 }
 
 func (v *enginesView) Help() []key.Binding {
+	if v.byName[v.selectedEngine()].ExternallyManaged {
+		return nil
+	}
 	return []key.Binding{engStartKey, engStopKey, engRestartKey, engInstallKey, engUninstallKey, engPullKey}
 }
 

@@ -203,7 +203,14 @@ export function BackendHeader({
                     )
                 })()}
 
+            {!isUnavailable && caps.externallyManaged && (
+                <Text kind="body/regular/sm">
+                    Externally managed ·{' '}
+                    {backend.processStatus === 'running' ? 'Connected' : 'Offline'}
+                </Text>
+            )}
             {!isUnavailable &&
+                !caps.externallyManaged &&
                 !isTransitioning &&
                 backend.processStatus !== 'not-installed' &&
                 (() => {
@@ -249,15 +256,18 @@ export function BackendHeader({
                     return toggle
                 })()}
 
-            {!isUnavailable && !isTransitioning && backend.processStatus === 'not-installed' && (
-                <InstallButton
-                    backend={backend}
-                    targetOs={targetOs}
-                    isLocalNode={isLocalNode}
-                    disabled={disabled}
-                    onInstall={onInstall}
-                />
-            )}
+            {!isUnavailable &&
+                !caps.externallyManaged &&
+                !isTransitioning &&
+                backend.processStatus === 'not-installed' && (
+                    <InstallButton
+                        backend={backend}
+                        targetOs={targetOs}
+                        isLocalNode={isLocalNode}
+                        disabled={disabled}
+                        onInstall={onInstall}
+                    />
+                )}
         </Flex>
     )
 }

@@ -20,6 +20,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -807,9 +808,21 @@ func (p *Proxy) emitWorkload(method string, w Workload) {
 // pinned to that peer's exact server cert. Empty peerUUID means a plain-HTTP
 // dial — the local backend (self) or an explicit manual node.
 type candidate struct {
+	// engine names which engine behind the facade this candidate reaches; empty
+	// means the facade's own. It is attribution only, never part of routing.
+	engine   string
 	id       string
 	url      *url.URL
 	peerUUID string
+}
+
+// engineName is the engine to attribute work sent to this candidate to,
+// falling back to the facade's own when the candidate does not name one.
+func (c candidate) engineName(fallback string) string {
+	if c.engine != "" {
+		return c.engine
+	}
+	return fallback
 }
 
 // candidateTransport returns the reverse-proxy / model-list transport for a
@@ -1296,9 +1309,13 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if isInf && model != "" {
 		createdMs := start.UnixMilli()
 		wl = &Workload{
-			ID:        reqID,
-			Model:     model,
-			Engine:    f.profile.Name,
+			ID:    reqID,
+			Model: model,
+			// Fixed here, not re-pointed on failover: the broker's workload store
+			// keys on the engine, so changing it mid-flight would orphan the
+			// queued record under the old one. Candidates are ordered by now,
+			// so the first is the engine this request is dispatched to first.
+			Engine:    candidates[0].engineName(f.profile.Name),
 			RunID:     p.runID,
 			State:     "queued",
 			CreatedAt: createdMs,
@@ -1990,18 +2007,37 @@ func (f *facade) resolveCandidates(model string) []candidate {
 			return
 		}
 		peerUUID := ""
+		// engine names which local endpoint actually answered for self; a peer
+		// is attributed from its advertised per-engine inventory instead.
+		engine := ""
+		// extra holds this node's remaining local engines, appended after the
+		// preferred one so the profile's first engine still leads the order.
+		var extra []candidate
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
 			// Our own advertised endpoint (ol now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
 			// still used this node's real (discovered) model list above.
-			lb, ok := f.localBackendTarget()
-			if !ok {
+			localCandidates := f.localEngineCandidates(model)
+			if len(localCandidates) == 0 {
 				slog.Debug("resolveCandidates: no local backend for self", "node_id", n.ID)
 				return
 			}
-			u = lb
+			u = localCandidates[0].url
+			engine = localCandidates[0].engine
+			// With no model named — an aggregate model list, or an inference
+			// body that omits one — every local engine is a candidate, so the
+			// list covers all of them and failover can reach the others.
+			if model == "" {
+				for _, local := range localCandidates[1:] {
+					if isSelfTarget(local.url, selfPort) || isAnyAliasSelfTarget(local.url, aliasBoundAddresses) {
+						continue
+					}
+					local.id = n.ID
+					extra = append(extra, local)
+				}
+			}
 		case p.mesh.HasPin(n.ClusterUUID):
 			// A pinned cluster peer: reach it only over mTLS to its promoted
 			// proxy (the ol port now advertises the proxy, not the engine).
@@ -2035,11 +2071,22 @@ func (f *facade) resolveCandidates(model string) []candidate {
 			return
 		}
 		seenHost[u.Host] = true
+		if engine == "" {
+			engine = n.engineForModel(f.profile.localEngineNames(), model)
+		}
 		out = append(out, candidate{
 			id:       n.ID,
 			url:      u,
 			peerUUID: peerUUID,
+			engine:   engine,
 		})
+		for _, local := range extra {
+			if seenHost[local.url.Host] {
+				continue
+			}
+			seenHost[local.url.Host] = true
+			out = append(out, local)
+		}
 	}
 
 	// Capability has already been enforced. An eligible explicit selection wins,
@@ -2542,7 +2589,10 @@ func subscribedToNode(p engineProfile, n noderec.DirectoryNode) (Node, bool) {
 		// a model that a dual-engine node serves solely via LM Studio isn't
 		// accepted as an Ollama owner here (falls back to the union for a peer
 		// that sends no attribution — see DirectoryNode.EngineModels).
-		Models: append([]string(nil), n.EngineModels(p.Name)...),
+		Models: p.nodeModels(n),
+		// Kept per engine so a request can be attributed to the engine that
+		// actually serves its model.
+		ModelsByEngine: n.ModelsByEngine,
 	}, true
 }
 
@@ -2815,7 +2865,7 @@ func (p *Proxy) handleMessage(msg *Message) {
 		// would point one engine's ingress and self-candidate at the other
 		// engine's port — and the old log line, which echoed the payload,
 		// would have named the wrong engine and hidden the cross-wire.
-		if b.Engine != "" && b.Engine != engine {
+		if b.Engine != "" && !slices.Contains(f.profile.localEngineNames(), b.Engine) {
 			p.codec.RespondError(msg.ID, -32602, fmt.Sprintf(
 				"params name engine %q but the request is addressed to %q", b.Engine, engine))
 			return
@@ -2825,7 +2875,7 @@ func (p *Proxy) handleMessage(msg *Message) {
 			return
 		}
 		slog.Info("local backend updated",
-			"engine", f.profile.Name, "host", b.Host, "port", b.Port, "healthy", b.Healthy)
+			"engine", f.profile.Name, "backend", b.Engine, "host", b.Host, "port", b.Port, "healthy", b.Healthy)
 		if err := p.codec.Respond(msg.ID, map[string]bool{"ok": true}); err != nil {
 			log.Printf("failed to respond to node/set-local-backend: %v", err)
 		}

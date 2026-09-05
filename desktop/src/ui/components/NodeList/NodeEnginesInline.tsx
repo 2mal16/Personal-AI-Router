@@ -3,6 +3,7 @@
 
 import { EnabledEngineTypes, EngineDisplayNames } from '@/shared/constants/engines'
 import { EngineType } from '@/shared/types/engines'
+import { EngineCapabilities } from '@/ui/constants/engine-capabilities'
 import { useEngineStatusStore } from '@/ui/stores/engine-status.store'
 import { useConnectionStore } from '@/ui/stores/connection.store'
 import { useNodesStore } from '@/ui/stores/nodes.store'
@@ -83,6 +84,24 @@ export default function NodeEnginesInline({ nodeId }: { nodeId: string }) {
                     b.status === 'uninstalling' ||
                     b.status === 'starting' ||
                     b.status === 'stopping'
+
+                // An externally managed engine has no lifecycle for PAIR to
+                // drive: its switch would only ever raise an error from the
+                // engine-manager, so the row reports the connection instead.
+                if (EngineCapabilities[b.type].externallyManaged) {
+                    return (
+                        <Flex
+                            key={b.name}
+                            align="center"
+                            gap="2"
+                            className="shrink-0 no-drag-elements pair-engines-inline"
+                        >
+                            <Text kind="body/regular/sm">
+                                {b.name} · {b.status === 'running' ? 'Connected' : 'Offline'}
+                            </Text>
+                        </Flex>
+                    )
+                }
 
                 if (b.status === 'not-installed' && !pending) {
                     return (

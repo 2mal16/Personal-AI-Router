@@ -16,6 +16,7 @@ package main
 // proxy.go.
 
 import (
+	"maps"
 	"slices"
 	"sync"
 
@@ -31,11 +32,12 @@ var uuidFromTXT = discovery.UUIDFromTXT
 // Node is the proxy's routable view of a node. It adds a canonical dialable IP
 // field over the discovered node shape.
 type Node struct {
-	ID        string   `json:"id"`
-	Host      string   `json:"host"`
-	Port      int      `json:"port"`
-	Addresses []string `json:"addresses"`
-	TXT       []string `json:"txt"`
+	ModelsByEngine map[string][]string `json:"modelsByEngine,omitempty"`
+	ID             string              `json:"id"`
+	Host           string              `json:"host"`
+	Port           int                 `json:"port"`
+	Addresses      []string            `json:"addresses"`
+	TXT            []string            `json:"txt"`
 	// Models is the latest model inventory carried by the broker's discovery
 	// snapshot. Model-bearing inference is eligible only when this list
 	// advertises the requested model; an empty list stays in discovery but is
@@ -152,7 +154,7 @@ func (d *Discovery) SetSubscribed(nodes []Node) (discovered, updated, removed []
 func nodeEqual(a, b Node) bool {
 	return a.ID == b.ID && a.Host == b.Host && a.Port == b.Port && a.IP == b.IP &&
 		slices.Equal(a.Addresses, b.Addresses) && slices.Equal(a.TXT, b.TXT) &&
-		slices.Equal(a.Models, b.Models)
+		slices.Equal(a.Models, b.Models) && maps.EqualFunc(a.ModelsByEngine, b.ModelsByEngine, slices.Equal[[]string])
 }
 
 func (d *Discovery) AddManual(node Node) (added bool) {
@@ -178,4 +180,17 @@ func (d *Discovery) IsManual(id string) bool {
 	defer d.mu.RUnlock()
 	_, exists := d.manualNodes[id]
 	return exists
+}
+
+// engineForModel names which of engines advertises model on this node, for
+// attributing work to the engine that serves it. The first engine in the list
+// wins a duplicate id, matching local routing preference; with no model, or one
+// no inventory lists, it falls back to the first engine.
+func (n Node) engineForModel(engines []string, model string) string {
+	for _, name := range engines {
+		if slices.Contains(n.ModelsByEngine[name], model) {
+			return name
+		}
+	}
+	return engines[0]
 }
