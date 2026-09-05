@@ -27,6 +27,10 @@ import (
 func TestBundledModelStores_RemainOutsideApplicationDataRoot(t *testing.T) {
 	forbidden := []string{"nvidia corporation", "personal ai router"}
 	for name, manifest := range bundledManifestSet(t) {
+		if _, external := externalEngineHosts[name]; external {
+			// PAIR never stores or deletes an external engine's models.
+			continue
+		}
 		for key, platform := range manifest.Platforms {
 			if !assert.NotEmpty(t, platform.ModelsDir, "%s/%s: declare the engine's model store so uninstall knows what to keep", name, key) {
 				continue

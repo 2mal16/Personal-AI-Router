@@ -4,12 +4,19 @@
 import { EngineType, ModelExpiry } from '@/shared/types/engines'
 
 // The engines `nvpair-engine-manager` ships a manifest for, and therefore the
-// only ones PAIR can install, run or route to.
-export const EngineTypes = ['ollama', 'lm-studio', 'llama-cpp', 'vllm'] as const
+// only ones PAIR can install, run or route to. llama-swap is externally
+// managed: PAIR observes it and routes inference, but never runs it.
+export const EngineTypes = ['ollama', 'lm-studio', 'llama-cpp', 'vllm', 'llama-swap'] as const
 
 // Kept as a distinct export so a future engine can ship behind it rather than
 // appearing the moment its type exists.
-export const EnabledEngineTypes: EngineType[] = ['ollama', 'lm-studio', 'llama-cpp', 'vllm']
+export const EnabledEngineTypes: EngineType[] = [
+    'ollama',
+    'lm-studio',
+    'llama-cpp',
+    'vllm',
+    'llama-swap'
+]
 
 /**
  * Engines whose model list is read from disk, so it is available while the engine
@@ -27,7 +34,8 @@ export const EngineManagerNames = {
     ollama: 'ollama',
     'lm-studio': 'lmstudio',
     'llama-cpp': 'llamacpp',
-    vllm: 'vllm'
+    vllm: 'vllm',
+    'llama-swap': 'llama-swap'
 } as const satisfies Record<EngineType, string>
 
 export const EngineSources = ['bundled', 'detected', 'installed'] as const
@@ -36,7 +44,8 @@ export const EngineDisplayNames: Record<EngineType, string> = {
     ollama: 'Ollama',
     'lm-studio': 'LM Studio',
     'llama-cpp': 'llama.cpp',
-    vllm: 'vLLM'
+    vllm: 'vLLM',
+    'llama-swap': 'llama-swap'
 } as const
 
 /** Default docs/install URLs for built-in backends. Single source of truth for UI and adapter buildInfo(). */
@@ -50,6 +59,10 @@ export const EngineDefaultLinks: Record<EngineType, { docsUrl: string; installUr
     vllm: {
         docsUrl: 'https://docs.vllm.ai/',
         installUrl: 'https://docs.vllm.ai/en/latest/getting_started/installation.html'
+    },
+    'llama-swap': {
+        docsUrl: 'https://github.com/mostlygeek/llama-swap',
+        installUrl: 'https://github.com/mostlygeek/llama-swap'
     }
 } as const
 

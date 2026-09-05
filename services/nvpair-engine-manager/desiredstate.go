@@ -137,6 +137,9 @@ func (e *Executor) restoreEnabled(ctx context.Context, engine string) error {
 	if err != nil {
 		return err
 	}
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		return nil
+	}
 	st.lockOperation()
 	defer st.unlockOperation()
 	enabled, known, err := e.desired.get(engine)

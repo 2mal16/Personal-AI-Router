@@ -165,7 +165,10 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
     )
     const isRunning = useMemo(() => backend.processStatus === 'running', [backend.processStatus])
     const supportsSearch = useMemo(
-        () => caps !== undefined && (!hasModelSearchOnlyWhenRunning || isRunning),
+        () =>
+            caps !== undefined &&
+            !caps.externallyManaged &&
+            (!hasModelSearchOnlyWhenRunning || isRunning),
         [caps, hasModelSearchOnlyWhenRunning, isRunning]
     )
 

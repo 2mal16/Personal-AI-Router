@@ -16,6 +16,7 @@ export interface EngineHubConfig {
 }
 
 export interface EngineCaps {
+    externallyManaged?: boolean
     hasExpiry: boolean
     hasEject: boolean
     /** Platforms where PAIR can auto-install this engine. Empty = no auto-install. */

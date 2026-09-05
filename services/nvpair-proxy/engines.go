@@ -124,6 +124,15 @@ type engineProfile struct {
 	// claim one names that variable. Gating on this makes the scoping
 	// enforced rather than left to the broker's restraint in passing the flag.
 	SupportsHostAlias bool
+
+	// LocalEngines names every loopback engine this facade fronts, in routing
+	// preference order, when that is more than the facade's own engine. An
+	// externally managed engine that speaks this facade's dialect (llama-swap
+	// is OpenAI-compatible) rides here rather than getting a facade and a port
+	// of its own: clients keep one endpoint, and the broker addresses its
+	// node/set-local-backend to this facade with the engine named in the
+	// payload. Empty means the facade fronts only its own engine.
+	LocalEngines []string
 }
 
 // ollamaBaseRoutes is the engine-specific surface that Ollama exposes before
@@ -197,6 +206,9 @@ func buildProfiles() []engineProfile {
 			StandalonePort: 1234,
 			Routes:         lmStudioRoutes,
 			ModelNaming:    exactID,
+			// LM Studio wins a duplicate model id; llama-swap stays reachable
+			// for the models only it serves.
+			LocalEngines: []string{"lmstudio", "llama-swap"},
 			// 1235 is where engine-manager runs a managed LM Studio, so a
 			// proxy that restored it would sit on the engine's own port. The
 			// stored value predates the current default of 1234.

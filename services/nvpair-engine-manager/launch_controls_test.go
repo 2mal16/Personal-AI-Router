@@ -113,7 +113,14 @@ func TestBundledManifests_DeclareReviewedNetworkingControls(t *testing.T) {
 	reg := loadWithOverrides(t, t.TempDir())
 	// Adding a bundled engine requires an explicit networking review and cases.
 	wantEngines := []string{"llamacpp", "lmstudio", "ollama", "vllm"}
-	names := reg.Names()
+	// Externally managed engines are observed, not launched, so there are no
+	// networking controls to review for them.
+	var names []string
+	for _, name := range reg.Names() {
+		if _, external := externalEngineHosts[name]; !external {
+			names = append(names, name)
+		}
+	}
 	slices.Sort(names)
 	assert.Equal(t, wantEngines, names, "review networking controls for every bundled engine")
 	for _, name := range names {

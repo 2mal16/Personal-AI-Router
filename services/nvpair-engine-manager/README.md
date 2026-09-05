@@ -592,3 +592,22 @@ another attempt can succeed where a declined stop cannot.
 (a start, stop, install or model switch can hold an engine for minutes): while
 one runs they report what is already known and the operation reports its own
 result.
+
+## Externally managed engines
+
+The `external` manifest runtime mode monitors an existing local server. It requires
+an explicit port and readiness probe, prohibits lifecycle commands/installers,
+and permits read-only HTTP GET actions. The bundled `llama-swap` manifest probes
+loopback port 10000 and extracts model IDs from `/v1/models` (`data[].id`).
+
+`EngineStatus` adds optional `externally_managed: true`. Clients must offer
+monitoring and port configuration instead of lifecycle controls for these engines.
+`engine:start`, `engine:stop`, `engine:restart`, `engine:install`, and
+`engine:uninstall` return errors without changing the process or desired state.
+Shutdown and saved-enabled restoration skip external engines. Their status is
+the readiness probe alone, run like every passive status check without the
+operation lock; an external engine always reports `installed: true` so its row
+stays visible while the server is offline.
+`engine:set-port` changes the persisted connection port without restarting the
+server. Inventory changes also emit `engine:models-changed`; no loaded/resident
+state is fabricated. See [setup instructions](../../docs/llama-swap.mdx).

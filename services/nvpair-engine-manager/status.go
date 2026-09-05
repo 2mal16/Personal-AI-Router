@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -211,13 +212,14 @@ func (e *Executor) snapshot(engine string, st *engineState) EngineStatus {
 
 func statusLocked(engine string, st *engineState) EngineStatus {
 	return EngineStatus{
-		Engine:      engine,
-		DisplayName: st.manifest.DisplayName,
-		Installed:   st.installed,
-		Running:     st.running,
-		Starting:    st.starting && !st.running,
-		Healthy:     st.healthy,
-		Port:        st.port,
+		ExternallyManaged: st.plat.Runtime.modeOrDefault() == "external",
+		Engine:            engine,
+		DisplayName:       st.manifest.DisplayName,
+		Installed:         st.installed,
+		Running:           st.running,
+		Starting:          st.starting && !st.running,
+		Healthy:           st.healthy,
+		Port:              st.port,
 	}
 }
 
@@ -247,6 +249,11 @@ func (e *Executor) refreshPassiveStatus(engine string, st *engineState, key stat
 	ready := st.plat.Runtime.Ready
 	mode := st.plat.Runtime.modeOrDefault()
 	st.mu.Unlock()
+
+	if mode == "external" {
+		e.refreshExternalStatus(ctx, engine, st, key, run, ready)
+		return
+	}
 
 	pathInstalled, binPath := detectPath(st)
 	checkPresence := pathInstalled || mode == "process"
@@ -338,6 +345,38 @@ func (e *Executor) refreshPassiveStatus(engine string, st *engineState, key stat
 	}
 }
 
+// refreshExternalStatus is refreshPassiveStatus for an engine PAIR observes but
+// does not own. There is no binary to detect and no process to adopt: the
+// readiness probe alone says whether the server is up, and an external engine
+// always reads as installed so its row stays visible while it is offline. The
+// probe runs without the state lock and commits under the same revision check.
+func (e *Executor) refreshExternalStatus(ctx context.Context, engine string, st *engineState, key statusProbeKey, run *statusProbeRun, ready *Probe) {
+	healthy := key.port != 0 && ready != nil && e.probe(ctx, ready, key.port)
+	if ctx.Err() != nil {
+		run.err = ctx.Err()
+		return
+	}
+	st.mu.Lock()
+	if st.opDone != nil || st.revision != key.revision {
+		run.stale = true
+		st.mu.Unlock()
+		return
+	}
+	before := statusLocked(engine, st)
+	st.installed = true
+	st.running = healthy
+	st.healthy = healthy
+	st.port = key.port
+	after := statusLocked(engine, st)
+	if before != after {
+		st.revision++
+	}
+	st.mu.Unlock()
+	if before != after {
+		e.emitState(engine)
+	}
+}
+
 // reconcilePresence reconciles filesystem detection with a fixed-port engine
 // service. A successful engine-specific readiness probe is authoritative even
 // when the binary lives outside NVPAIR's managed paths. Conversely, readiness
@@ -348,6 +387,20 @@ func (e *Executor) refreshPassiveStatus(engine string, st *engineState, key stat
 // allowWhileStopping is true only for an explicit Start. Passive status checks
 // must not undo a deliberate OFF by re-adopting a service behind st.stopping.
 func (e *Executor) reconcilePresence(ctx context.Context, engine string, st *engineState, pathInstalled bool, port int, allowWhileStopping bool) presenceResult {
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		healthy := e.probe(ctx, st.plat.Runtime.Ready, port)
+		st.mu.Lock()
+		changed := st.running != healthy || st.healthy != healthy || st.port != port
+		st.installed = true
+		st.running = healthy
+		st.healthy = healthy
+		st.port = port
+		st.mu.Unlock()
+		if changed {
+			e.emitState(engine)
+		}
+		return presenceResult{Identified: healthy, Occupied: healthy}
+	}
 	st.mu.Lock()
 	running := st.running
 	adopted := st.adopted
@@ -465,4 +518,12 @@ func (e *Executor) emitState(engine string) {
 		return
 	}
 	e.notify("engine:state-changed", e.snapshot(engine, st))
+}
+
+// External engines are observed, never controlled by PAIR.
+func rejectExternalLifecycle(st *engineState, engine string) error {
+	if st.plat.Runtime.modeOrDefault() == "external" {
+		return fmt.Errorf("engine %q is externally managed; manage its process and models in its own application", engine)
+	}
+	return nil
 }

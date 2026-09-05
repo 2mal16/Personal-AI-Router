@@ -38,5 +38,22 @@ func TestBundledManifestSet_MatchesEngineTable(t *testing.T) {
 		assert.Contains(t, have, engine.Name, "engine table entry has no bundled manifest")
 		delete(have, engine.Name)
 	}
-	assert.Empty(t, have, "bundled manifests have no entry in nvpair-shared/engines")
+	// An externally managed engine is observed, never launched, and rides the
+	// facade of the engine whose dialect it speaks (llama-swap is served by the
+	// lmstudio facade, see LocalEngines in nvpair-proxy's profile), so it has no
+	// engines-table entry of its own: that table is what mints a facade, a port
+	// and a discovery key. Any other manifest still needs one.
+	for name := range have {
+		if host, ok := externalEngineHosts[name]; ok {
+			if _, hosted := engines.ByName(host); !hosted {
+				t.Errorf("manifests/%s.json is hosted by %q, which is not in nvpair-shared/engines", name, host)
+			}
+			continue
+		}
+		t.Errorf("manifests/%s.json has no entry in nvpair-shared/engines", name)
+	}
 }
+
+// externalEngineHosts maps each externally managed bundled engine to the engine
+// whose proxy facade fronts it.
+var externalEngineHosts = map[string]string{"llama-swap": "lmstudio"}

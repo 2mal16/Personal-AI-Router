@@ -17,20 +17,33 @@ import { gatewayEndpointDisplayUrl } from '@/ui/utils/gateway-inference-paths'
 
 describe('engine identity', () => {
     it('enables llama.cpp workflows on every platform', () => {
-        expect(EngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp', 'vllm'])
-        expect(EnabledEngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp', 'vllm'])
+        expect(EngineTypes).toEqual(['ollama', 'lm-studio', 'llama-cpp', 'vllm', 'llama-swap'])
+        expect(EnabledEngineTypes).toEqual([
+            'ollama',
+            'lm-studio',
+            'llama-cpp',
+            'vllm',
+            'llama-swap'
+        ])
         expect(getWelcomeEngineCandidates('Windows')).toContain('llama-cpp')
         expect(getWelcomeEngineCandidates('MacOS')).toContain('llama-cpp')
         expect(getWelcomeEngineCandidates('Linux')).toContain('llama-cpp')
     })
 
-    it('preselects every engine during onboarding', () => {
+    it('preselects every engine PAIR can install during onboarding', () => {
         expect(WELCOME_ENGINE_DEFAULT_SELECTED).toEqual({
             ollama: true,
             'lm-studio': true,
             'llama-cpp': true,
-            vllm: true
+            vllm: true,
+            'llama-swap': false
         })
+    })
+
+    it('never offers to install the externally managed llama-swap', () => {
+        for (const os of ['Windows', 'MacOS', 'Linux'] as const) {
+            expect(getWelcomeEngineCandidates(os)).not.toContain('llama-swap')
+        }
     })
 
     it('offers vLLM on Linux and macOS, not Windows', () => {

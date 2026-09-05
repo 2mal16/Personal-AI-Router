@@ -40,3 +40,39 @@ export function proxyEngineFromManagerId(managerName: string): ProxyEngine | nul
     const engine = engineTypeFromManagerName(managerName)
     return engine !== null && isProxyEngine(engine) ? engine : null
 }
+
+/**
+ * Engines with no proxy of their own, each served by another engine's proxy.
+ * llama-swap is externally managed and OpenAI-compatible, so it rides LM
+ * Studio's facade: its models are listed and routed there, and its presence is
+ * read from that facade's per-engine inventory.
+ */
+export type HostedEngine = Extract<EngineType, 'llama-swap'>
+
+const HOSTED_ENGINE_FACADE: Record<HostedEngine, ProxyEngine> = { 'llama-swap': 'lm-studio' }
+
+/** Every engine whose presence the proxy plane reports, with or without a proxy of its own. */
+export type RoutedEngine = ProxyEngine | HostedEngine
+
+export const ROUTED_ENGINES: readonly RoutedEngine[] = [...PROXY_ENGINES, 'llama-swap']
+
+function isHostedEngine(engine: EngineType): engine is HostedEngine {
+    return Object.hasOwn(HOSTED_ENGINE_FACADE, engine)
+}
+
+export function isRoutedEngine(engine: EngineType): engine is RoutedEngine {
+    return isProxyEngine(engine) || isHostedEngine(engine)
+}
+
+/** The proxy that fronts an engine: its own, or the one hosting it. */
+export function facadeForEngine(engine: RoutedEngine): ProxyEngine {
+    return isHostedEngine(engine) ? HOSTED_ENGINE_FACADE[engine] : engine
+}
+
+/** The engines a proxy fronts: its own first, then any it hosts. */
+export function enginesOnFacade(facade: ProxyEngine): RoutedEngine[] {
+    const hosted = ROUTED_ENGINES.filter(
+        engine => isHostedEngine(engine) && HOSTED_ENGINE_FACADE[engine] === facade
+    )
+    return [facade, ...hosted]
+}

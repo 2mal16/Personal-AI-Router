@@ -941,6 +941,10 @@ func (d *nodeDetail) editSetting(engine *engineStatus, mode detailInputMode) tea
 		d.status.error("no engine selected")
 		return nil
 	}
+	if engine.ExternallyManaged {
+		d.status.error("%s is externally managed: configure it in its own application", engine.label())
+		return nil
+	}
 	if w := d.settingsAwaited; w != nil {
 		// One change at a time. The screen follows a single outstanding
 		// write, so a second one took its place and the first's verdict was
@@ -1261,6 +1265,10 @@ func (d *nodeDetail) lifecycle(engine *engineStatus, op string) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if engine.ExternallyManaged {
+		d.status.error("%s is externally managed: %s it in its own application", engine.label(), spec.what)
+		return nil
+	}
 	if spec.localOnly && d.remote() {
 		d.status.error("%s is only available on the machine running the engine", spec.what)
 		return nil
@@ -1311,6 +1319,10 @@ func (d *nodeDetail) modelOp(op string) tea.Cmd {
 		// Every model operation is addressed to an engine, and this node did not
 		// say which one serves this model. Guessing would act on the wrong one.
 		d.status.error("%s did not report which engine serves %s", d.node.name, row.model)
+		return nil
+	}
+	if d.externallyManaged(row.engine) {
+		d.status.error("%s is externally managed: manage its models in its own application", d.engineLabel(row.engine))
 		return nil
 	}
 	d.status.busy("%s %s...", act.what, row.model)
@@ -1448,6 +1460,10 @@ func (d *nodeDetail) deleteSelectedModel() tea.Cmd {
 		d.status.error("%s did not report which engine serves %s", d.node.name, row.model)
 		return nil
 	}
+	if d.externallyManaged(row.engine) {
+		d.status.error("%s is externally managed: manage its models in its own application", d.engineLabel(row.engine))
+		return nil
+	}
 	target := *row
 	return d.arm(fmt.Sprintf("delete %s from %s?", target.model, d.engineLabel(target.engine)), func() tea.Cmd {
 		d.status.busy("delete %s...", target.model)
@@ -1459,6 +1475,10 @@ func (d *nodeDetail) deleteSelectedModel() tea.Cmd {
 func (d *nodeDetail) uninstallEngine(engine *engineStatus) tea.Cmd {
 	if engine == nil {
 		d.status.error("no engine selected")
+		return nil
+	}
+	if engine.ExternallyManaged {
+		d.status.error("%s is externally managed: uninstall it in its own application", engine.label())
 		return nil
 	}
 	name, label := engine.Engine, engine.label()
@@ -1474,11 +1494,11 @@ func (d *nodeDetail) uninstallEngine(engine *engineStatus) tea.Cmd {
 // Hugging Face cache) can be chosen stopped when it is highlighted, as the
 // desktop app allows.
 func (d *nodeDetail) pullTargetEngine() string {
-	if e := d.selectedEngine(); e != nil && (e.Running || e.Installed && pullsWhileStopped[e.Engine]) {
+	if e := d.selectedEngine(); e != nil && !e.ExternallyManaged && (e.Running || e.Installed && pullsWhileStopped[e.Engine]) {
 		return e.Engine
 	}
 	for _, e := range d.engines {
-		if e.Running {
+		if e.Running && !e.ExternallyManaged {
 			return e.Engine
 		}
 	}
@@ -1512,7 +1532,11 @@ func (d *nodeDetail) refreshEngines() {
 		if e.Starting {
 			running = "starting"
 		}
-		row := table.Row{e.label(), yesNo(e.Installed), running, yesNo(e.Healthy), port}
+		name := e.label()
+		if e.ExternallyManaged {
+			name += " (external)"
+		}
+		row := table.Row{name, yesNo(e.Installed), running, yesNo(e.Healthy), port}
 		if d.proxy != nil {
 			row = append(row, d.proxyPortCell(e.Engine))
 		}
@@ -1625,6 +1649,17 @@ func (d *nodeDetail) refreshModels() {
 // confirmation, which is the last place to introduce a word the operator has
 // not seen. Falls back to the key for an engine not in the list, which is what
 // a stale selection would produce.
+// externallyManaged reports whether this node says PAIR does not own the
+// engine's process or models.
+func (d *nodeDetail) externallyManaged(key string) bool {
+	for _, e := range d.engines {
+		if e.Engine == key {
+			return e.ExternallyManaged
+		}
+	}
+	return false
+}
+
 func (d *nodeDetail) engineLabel(key string) string {
 	for _, e := range d.engines {
 		if e.Engine == key {

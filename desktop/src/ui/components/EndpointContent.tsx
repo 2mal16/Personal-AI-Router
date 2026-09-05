@@ -10,7 +10,7 @@ import { useCallback, useMemo, useState } from 'react'
 import EngineIcon from './EngineIcon'
 import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/DismissibleTooltip'
 import { getEnginesForNode, isEngineTypeRunningClusterWide } from '@/ui/utils/get-engines-for-node'
-import { gatewayEndpointDisplayUrl } from '@/ui/utils/gateway-inference-paths'
+import { gatewayEndpointDisplayUrl, mergeEndpointsByUrl } from '@/ui/utils/gateway-inference-paths'
 import type { EngineType } from '@/shared/types/engines'
 
 function createCopiedState(enabledEngines: EngineType[]): Record<string, boolean> {
@@ -58,7 +58,7 @@ export default function EndpointContent({
             return []
         }
 
-        return engines
+        return mergeEndpointsByUrl(engines)
     }, [selfEngines, statusByNode])
 
     const handleCopy = useCallback(async (value: string, backend: string) => {

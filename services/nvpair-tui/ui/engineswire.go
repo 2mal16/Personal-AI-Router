@@ -18,10 +18,14 @@ import (
 // engineStatus mirrors nvpair-engine-manager's EngineStatus snapshot, the
 // element of engine:get-installed and the engine:state-changed payload.
 type engineStatus struct {
-	Engine      string `json:"engine"`
-	DisplayName string `json:"display_name"`
-	Installed   bool   `json:"installed"`
-	Running     bool   `json:"running"`
+	// ExternallyManaged marks an engine PAIR observes but never starts, stops,
+	// installs or configures, such as llama-swap. Its own application owns the
+	// process and the models.
+	ExternallyManaged bool   `json:"externally_managed"`
+	Engine            string `json:"engine"`
+	DisplayName       string `json:"display_name"`
+	Installed         bool   `json:"installed"`
+	Running           bool   `json:"running"`
 	// Starting is true while a start is launching the engine and waiting for
 	// it to become ready, which for vLLM can be minutes.
 	Starting bool `json:"starting"`

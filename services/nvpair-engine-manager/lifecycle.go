@@ -95,6 +95,9 @@ func (e *Executor) StartWith(ctx context.Context, engine string, opts startOpts)
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	st.lockOperation()
 	defer st.unlockOperation()
 	if err := e.doStart(ctx, st, engine, opts); err != nil {
@@ -499,6 +502,9 @@ func (e *Executor) Stop(engine string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	done, _ := e.requestStop(st)
 	defer done()
 	st.lockOperation()
@@ -850,6 +856,9 @@ func (e *Executor) Restart(ctx context.Context, engine string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	st.lockOperation()
 	defer st.unlockOperation()
 	if err := e.doStop(st, engine); err != nil {
@@ -938,6 +947,9 @@ func (e *Executor) stopEngines(names []string) []string {
 	for i, n := range names {
 		st, err := e.state(n)
 		if err != nil {
+			continue
+		}
+		if st.plat.Runtime.modeOrDefault() == "external" {
 			continue
 		}
 		wg.Go(func() {

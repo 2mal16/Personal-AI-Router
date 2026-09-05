@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Original swap-arrows mark drawn for PAIR; not the llama-swap project logo. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250">
+  <g fill="none" stroke="#222" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M55 95 H190 M160 65 L190 95 L160 125"/>
+    <path d="M195 155 H60 M90 125 L60 155 L90 185"/>
+  </g>
+</svg>

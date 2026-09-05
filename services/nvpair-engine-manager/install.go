@@ -27,6 +27,9 @@ func (e *Executor) Install(ctx context.Context, engine string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
+		return err
+	}
 	st.lockOperation()
 	defer st.unlockOperation()
 	if ok, _ := e.Detect(engine); ok {
@@ -146,6 +149,9 @@ func (e *Executor) Install(ctx context.Context, engine string) error {
 func (e *Executor) Uninstall(ctx context.Context, engine string) error {
 	st, err := e.state(engine)
 	if err != nil {
+		return err
+	}
+	if err := rejectExternalLifecycle(st, engine); err != nil {
 		return err
 	}
 	st.lockOperation()

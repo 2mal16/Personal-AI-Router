@@ -23,13 +23,14 @@ import {
     parseWorkloadsInitial
 } from './modular-state'
 import {
-    isProxyEngine,
+    isRoutedEngine,
     proxyEngineFromManagerId,
     proxyEngineFromSource,
     proxySourceForEngine,
     PROXY_ENGINES,
     PROXY_NODE_SOURCES,
-    type ProxyEngine
+    type ProxyEngine,
+    type RoutedEngine
 } from './proxy-engines'
 import { emitBridgePush } from './broadcaster'
 import { parseEngineSettings } from './engine-settings'
@@ -344,8 +345,8 @@ class ModularSupervisor {
     private stoppedModelEngines = new Set<EngineType>()
     private successfulModelInventories = new Set<EngineType>()
     private modelRefreshGenerations = new Map<EngineType, number>()
-    private discoveryModelRetryTimers = new Map<ProxyEngine, ReturnType<typeof setTimeout>>()
-    private discoveryModelRetryAttempts = new Map<ProxyEngine, number>()
+    private discoveryModelRetryTimers = new Map<RoutedEngine, ReturnType<typeof setTimeout>>()
+    private discoveryModelRetryAttempts = new Map<RoutedEngine, number>()
     // Authoritative value is the persisted ui-config `modularLogLevel`; the
     // connector seeds it via setLogLevel() before start() so spawn args use it.
     // This default only applies if start() runs before the connector seeds.
@@ -1110,7 +1111,7 @@ class ModularSupervisor {
         this.firstOpenEngineStartDone = true
 
         for (const status of state.getEngineInitialState().statuses) {
-            if (status.nodeId !== selfId) continue
+            if (status.nodeId !== selfId || status.engineType === 'llama-swap') continue
             if (status.processStatus !== 'stopped' && status.processStatus !== 'running') continue
 
             const engine = engineManagerName(status.engineType)
@@ -1598,6 +1599,13 @@ class ModularSupervisor {
             // loaded set so the local node's model rows reflect residency at once,
             // ahead of the next discovery model-refresh sweep.
             getModularBridgeState().applyLocalLoadedModels(parseLoadedByEngine(notification.params))
+            const snapshot = objectValue(objectValue(notification.params)?.models)
+            const inventory = objectValue(snapshot?.modelsByEngine)?.['llama-swap']
+            if (Array.isArray(inventory)) {
+                const names = inventory.filter((name): name is string => typeof name === 'string')
+                const generation = this.beginModelRefresh('llama-swap')
+                this.commitModelInventory('llama-swap', names, generation)
+            }
             return
         }
         if (notification.method === 'engine:install-progress') {
@@ -1999,7 +2007,7 @@ class ModularSupervisor {
             this.stoppedModelEngines.add(engineType)
             this.stoppedModelSentinels.add(engineType)
             this.successfulModelInventories.delete(engineType)
-            if (isProxyEngine(engineType)) {
+            if (isRoutedEngine(engineType)) {
                 this.cancelDiscoveryModelRefreshRetry(engineType)
             }
             getModularBridgeState().setLocalEngineModels(engineType, [])
@@ -2039,7 +2047,7 @@ class ModularSupervisor {
      * external engine it has not adopted), a failure falls back to discovery.
      * Once a valid inventory exists, transient failures retain it.
      */
-    refreshDiscoveryEngineModels(engine: ProxyEngine): void {
+    refreshDiscoveryEngineModels(engine: RoutedEngine): void {
         this.cancelDiscoveryModelRefreshRetry(engine, false)
         if (this.stoppedModelEngines.has(engine) || this.shuttingDown) return
         if (!this.hasProcess('broker')) {
@@ -2073,13 +2081,13 @@ class ModularSupervisor {
         if (this.modelRefreshGenerations.get(engine) !== generation) return
         this.stoppedModelSentinels.delete(engine)
         this.successfulModelInventories.add(engine)
-        if (isProxyEngine(engine)) {
+        if (isRoutedEngine(engine)) {
             this.cancelDiscoveryModelRefreshRetry(engine)
         }
         getModularBridgeState().setLocalEngineModels(engine, models)
     }
 
-    private scheduleDiscoveryModelRefreshRetry(engine: ProxyEngine): void {
+    private scheduleDiscoveryModelRefreshRetry(engine: RoutedEngine): void {
         if (
             this.discoveryModelRetryTimers.has(engine) ||
             this.stoppedModelEngines.has(engine) ||
@@ -2100,7 +2108,7 @@ class ModularSupervisor {
         this.discoveryModelRetryTimers.set(engine, timer)
     }
 
-    private cancelDiscoveryModelRefreshRetry(engine: ProxyEngine, resetAttempt = true): void {
+    private cancelDiscoveryModelRefreshRetry(engine: RoutedEngine, resetAttempt = true): void {
         const timer = this.discoveryModelRetryTimers.get(engine)
         if (timer) clearTimeout(timer)
         this.discoveryModelRetryTimers.delete(engine)
@@ -2109,7 +2117,7 @@ class ModularSupervisor {
 
     private handleModelRefreshFailure(engine: EngineType, generation: number): void {
         if (this.modelRefreshGenerations.get(engine) !== generation) return
-        if (!isProxyEngine(engine)) return
+        if (!isRoutedEngine(engine)) return
         const wasStoppedSentinel = this.stoppedModelSentinels.delete(engine)
         if (wasStoppedSentinel || !this.successfulModelInventories.has(engine)) {
             // A stop caches [] so stale models are not shown while the engine is

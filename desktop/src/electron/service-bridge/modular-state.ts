@@ -19,7 +19,11 @@ import type { ClusterNode, Invite, NodeIdentityVerification } from '@/shared/typ
 import type { WsInvokeResponse } from '@/shared/types/ws-channels'
 import { MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS } from '@/shared/constants/modular-runtime'
 import { WorkloadStates } from '@/shared/constants/workloads'
-import { EngineTypes, EnginesListingModelsWhenStopped } from '@/shared/constants/engines'
+import {
+    EngineManagerNames,
+    EngineTypes,
+    EnginesListingModelsWhenStopped
+} from '@/shared/constants/engines'
 import {
     emptyEngineModels,
     emptyEngineStatus,
@@ -36,12 +40,15 @@ import { mergePullProgressPercent } from './pull-error-handling'
 import type { JsonObject, JsonRpcNotification, JsonValue } from './json-rpc-subprocess'
 import { serviceLogLevel } from './service-log-level'
 import {
-    isProxyEngine,
-    PROXY_ENGINES,
+    enginesOnFacade,
+    facadeForEngine,
+    isRoutedEngine,
     proxyEngineFromSource,
+    ROUTED_ENGINES,
     proxySourceForEngine,
     type ProxyEngine,
-    type ProxyNodeSource
+    type ProxyNodeSource,
+    type RoutedEngine
 } from './proxy-engines'
 
 // Live node sources are the reverse proxies, relayed through the broker, and
@@ -178,7 +185,7 @@ interface ModularNode extends NodeHardware {
     // a missing key means it was not read. Mirrors
     // noderec.DirectoryNode.DownloadedByEngine.
     downloadedByEngine: Record<string, string[]>
-    engines: Record<ProxyEngine, EnginePresence>
+    engines: Record<RoutedEngine, EnginePresence>
     lastSeen: number
 }
 
@@ -186,22 +193,37 @@ function emptyPresence(): EnginePresence {
     return { up: false, port: 0, version: null }
 }
 
-function emptyEngines(): Record<ProxyEngine, EnginePresence> {
+function emptyEngines(): Record<RoutedEngine, EnginePresence> {
     return {
         ollama: emptyPresence(),
         'lm-studio': emptyPresence(),
         'llama-cpp': emptyPresence(),
-        vllm: emptyPresence()
+        vllm: emptyPresence(),
+        'llama-swap': emptyPresence()
     }
 }
 
 /** Immutably set one engine's presence, preserving the other. */
 function setEngine(
-    engines: Record<ProxyEngine, EnginePresence>,
-    engine: ProxyEngine,
+    engines: Record<RoutedEngine, EnginePresence>,
+    engine: RoutedEngine,
     presence: EnginePresence
-): Record<ProxyEngine, EnginePresence> {
+): Record<RoutedEngine, EnginePresence> {
     return { ...engines, [engine]: presence }
+}
+
+/**
+ * Immutably take every engine one proxy fronts from `next`, preserving the
+ * rest: a proxy's feed speaks for the engines it hosts as well as its own.
+ */
+function setFacadeEngines(
+    engines: Record<RoutedEngine, EnginePresence>,
+    facade: ProxyEngine,
+    next: Record<RoutedEngine, EnginePresence>
+): Record<RoutedEngine, EnginePresence> {
+    let merged = engines
+    for (const engine of enginesOnFacade(facade)) merged = setEngine(merged, engine, next[engine])
+    return merged
 }
 
 /**
@@ -210,7 +232,7 @@ function setEngine(
  * port. Display-only — never dialed directly for inference.
  */
 function primaryServicePort(node: ModularNode): number {
-    for (const engine of PROXY_ENGINES) {
+    for (const engine of ROUTED_ENGINES) {
         const presence = node.engines[engine]
         if (presence.up && presence.port > 0) return presence.port
     }
@@ -219,7 +241,7 @@ function primaryServicePort(node: ModularNode): number {
 
 /** Whether any proxy engine reports the node as up. */
 function anyEngineUp(node: ModularNode): boolean {
-    return PROXY_ENGINES.some(engine => node.engines[engine].up)
+    return ROUTED_ENGINES.some(engine => node.engines[engine].up)
 }
 
 interface ModularGpu {
@@ -683,7 +705,7 @@ function toMetrics(node: ModularNode, timestamp: number): NodeItemMetrics {
 
 function toEngineStatus(
     node: ModularNode,
-    engine: ProxyEngine,
+    engine: RoutedEngine,
     proxyPort: number | null
 ): EngineStatusData {
     const presence = node.engines[engine]
@@ -733,6 +755,22 @@ function parseProxyNode(params: JsonValue | undefined, engine: ProxyEngine): Mod
         // The proxy `Node` carries no version field; engine version comes from
         // nvpair-engine-manager, not discovery.
         version: null
+    }
+    // A proxy that hosts other engines attributes the node's models to each of
+    // them, which is how a node running only one of them reads as up for that
+    // one alone. With no attribution the proxy's own engine keeps the presence.
+    const fronted = enginesOnFacade(engine)
+    if (fronted.length > 1) {
+        const inventory = parseModelsByEngine(obj.modelsByEngine)
+        if (Object.keys(inventory).length > 0) {
+            for (const each of fronted) {
+                engines[each] = {
+                    up: EngineManagerNames[each] in inventory,
+                    port: numberValue(obj.port),
+                    version: null
+                }
+            }
+        }
     }
     return {
         id,
@@ -881,10 +919,10 @@ function samePresence(left: EnginePresence, right: EnginePresence): boolean {
 }
 
 function sameEngines(
-    left: Record<ProxyEngine, EnginePresence>,
-    right: Record<ProxyEngine, EnginePresence>
+    left: Record<RoutedEngine, EnginePresence>,
+    right: Record<RoutedEngine, EnginePresence>
 ): boolean {
-    for (const engine of PROXY_ENGINES) {
+    for (const engine of ROUTED_ENGINES) {
         if (!samePresence(left[engine], right[engine])) return false
     }
     return true
@@ -982,7 +1020,7 @@ class ModularBridgeState {
     private localManagerModels = new Map<EngineType, ModelItem[]>()
     /** Supervisor-registered hook to re-pull the local discovery engine's
      *  authoritative `list_models` when discovery reports its model set changed. */
-    private onLocalDiscoveryModelsChanged: ((engine: ProxyEngine) => void) | null = null
+    private onLocalDiscoveryModelsChanged: ((engine: RoutedEngine) => void) | null = null
     /**
      * Optimistic transitional process status for a local engine while a
      * user-initiated lifecycle op is in flight. `nvpair-engine-manager` never emits
@@ -1137,8 +1175,8 @@ class ModularBridgeState {
     }
 
     /** Bound proxy port for an engine reported by the broker, or null if unknown. */
-    getProxyPort(engine: ProxyEngine): number | null {
-        const port = this.proxyPorts[engine]
+    getProxyPort(engine: RoutedEngine): number | null {
+        const port = this.proxyPorts[facadeForEngine(engine)]
         return port > 0 ? port : null
     }
 
@@ -1158,7 +1196,7 @@ class ModularBridgeState {
             const status = this.resolveLocalEngineStatus(engineType, selfNode)
             if (status) statuses.push(status)
             if (!selfId) continue
-            if (isProxyEngine(engineType)) {
+            if (isRoutedEngine(engineType)) {
                 models.push(this.discoveryModelsForNode(selfNode, engineType, selfId))
             } else {
                 const cached = this.localManagerModels.get(engineType)
@@ -1191,7 +1229,7 @@ class ModularBridgeState {
         // known — see {@link resolveRemoteEngineStatus}.
         for (const node of Array.from(this.nodes.values())) {
             if (node.id === selfId) continue
-            for (const engine of PROXY_ENGINES) {
+            for (const engine of ROUTED_ENGINES) {
                 const status = this.resolveRemoteEngineStatus(node.id, engine)
                 if (status) statuses.push(status)
                 models.push(this.toEngineModels(node, engine))
@@ -1489,7 +1527,7 @@ class ModularBridgeState {
      * decision matches the displayed status.
      */
     isRemoteEngineRunning(nodeId: string, engineType: EngineType): boolean {
-        if (!isProxyEngine(engineType)) return false
+        if (!isRoutedEngine(engineType)) return false
         const facts = this.remoteEngineFacts.get(this.remoteOpKey(nodeId, engineType))
         if (facts) return facts.running
         const node = this.nodes.get(nodeId)
@@ -1663,7 +1701,7 @@ class ModularBridgeState {
 
     private maybeClearRemotePendingFromDiscovery(
         nodeId: string,
-        engine: ProxyEngine,
+        engine: RoutedEngine,
         node: ModularNode
     ): void {
         const pending = this.pendingRemoteEngineOps.get(this.remoteOpKey(nodeId, engine))
@@ -1679,7 +1717,7 @@ class ModularBridgeState {
     }
 
     private emitRemoteEngineStatus(nodeId: string, engineType: EngineType): void {
-        if (!isProxyEngine(engineType)) return
+        if (!isRoutedEngine(engineType)) return
         if (!this.nodes.has(nodeId)) return
         // Re-emit models alongside status: authoritative facts arriving here can
         // flip which engine is the single active one, which changes model
@@ -1700,7 +1738,7 @@ class ModularBridgeState {
      * placeholder when nothing is known so stale inferred state is cleared
      * without asserting installed-but-off.
      */
-    private remoteEngineStatusForPush(nodeId: string, engine: ProxyEngine): EngineStatusData {
+    private remoteEngineStatusForPush(nodeId: string, engine: RoutedEngine): EngineStatusData {
         const status = this.resolveRemoteEngineStatus(nodeId, engine)
         return status ?? emptyEngineStatus(nodeId, engine)
     }
@@ -1738,7 +1776,7 @@ class ModularBridgeState {
      */
     private resolveRemoteEngineStatus(
         nodeId: string,
-        engine: ProxyEngine
+        engine: RoutedEngine
     ): EngineStatusData | null {
         const listed = this.remoteEngineLists.get(nodeId)
         if (listed && !listed.has(engine)) return unsupportedEngineStatus(nodeId, engine)
@@ -1795,12 +1833,12 @@ class ModularBridgeState {
         const obj = objectValue(result)
         const list = obj?.engines
         if (!Array.isArray(list)) return
-        const seen = new Set<ProxyEngine>()
+        const seen = new Set<RoutedEngine>()
         for (const entry of list) {
             const engineObj = objectValue(entry)
             if (!engineObj) continue
             const engineType = engineTypeFromManagerName(stringValue(engineObj.engine))
-            if (!engineType || !isProxyEngine(engineType)) continue
+            if (!engineType || !isRoutedEngine(engineType)) continue
             this.remoteEngineFacts.set(this.remoteOpKey(nodeId, engineType), {
                 installed: booleanValue(engineObj.installed),
                 running: booleanValue(engineObj.running),
@@ -1812,7 +1850,7 @@ class ModularBridgeState {
         }
         // A peer leaves out an engine it cannot run. An empty listing says nothing.
         if (seen.size > 0) this.remoteEngineLists.set(nodeId, seen)
-        for (const engine of PROXY_ENGINES) {
+        for (const engine of ROUTED_ENGINES) {
             if (!seen.has(engine)) {
                 this.remoteEngineFacts.delete(this.remoteOpKey(nodeId, engine))
             }
@@ -1830,7 +1868,7 @@ class ModularBridgeState {
         engineType: EngineType,
         result: JsonValue | undefined
     ): void {
-        if (!isProxyEngine(engineType)) return
+        if (!isRoutedEngine(engineType)) return
         const obj = objectValue(result)
         if (!obj) return
         this.remoteEngineFacts.set(this.remoteOpKey(nodeId, engineType), {
@@ -1846,7 +1884,7 @@ class ModularBridgeState {
     /** Forget a node's authoritative remote-engine facts (on eviction/leave). */
     private dropRemoteEngineFacts(nodeId: string): void {
         this.remoteEngineLists.delete(nodeId)
-        for (const engine of PROXY_ENGINES) {
+        for (const engine of ROUTED_ENGINES) {
             this.remoteEngineFacts.delete(this.remoteOpKey(nodeId, engine))
             this.remotePullModels.delete(this.remoteOpKey(nodeId, engine))
         }
@@ -1873,7 +1911,7 @@ class ModularBridgeState {
      * truncate; a pull/delete on an already-running engine emits no
      * `engine:state-changed`).
      */
-    setLocalDiscoveryModelRefresher(fn: (engine: ProxyEngine) => void): void {
+    setLocalDiscoveryModelRefresher(fn: (engine: RoutedEngine) => void): void {
         this.onLocalDiscoveryModelsChanged = fn
     }
 
@@ -1924,7 +1962,7 @@ class ModularBridgeState {
         // Loaded state feeds only the engine model rows (node identity, metrics,
         // and the invite-only discovery snapshot are unaffected), so re-emit just
         // the per-engine model patches.
-        for (const engine of PROXY_ENGINES) {
+        for (const engine of ROUTED_ENGINES) {
             const status =
                 this.resolveLocalEngineStatus(engine, next) ??
                 toEngineStatus(next, engine, this.getProxyPort(engine))
@@ -1945,7 +1983,7 @@ class ModularBridgeState {
      * released after restart. Clearing the override lets discovery be the source
      * of truth rather than blanking the UI with an empty list.
      */
-    fallbackLocalEngineModelsToDiscovery(engine: ProxyEngine): void {
+    fallbackLocalEngineModelsToDiscovery(engine: RoutedEngine): void {
         this.localManagerModels.delete(engine)
         const nodeId = this.selfId
         if (!nodeId) return
@@ -1979,7 +2017,7 @@ class ModularBridgeState {
      * preserves attribution for an externally-running engine that engine-manager
      * has not adopted (fact `running: false`) but the daemon enriched with models.
      */
-    private engineActiveForModels(node: ModularNode, engine: ProxyEngine): boolean {
+    private engineActiveForModels(node: ModularNode, engine: RoutedEngine): boolean {
         const presenceUp = node.engines[engine].up
         if (node.id === this.selfId) {
             return (this.engineManagerFacts.get(engine)?.running ?? false) || presenceUp
@@ -1997,7 +2035,7 @@ class ModularBridgeState {
      * cross-attributed when multiple run). Mirrors
      * noderec.DirectoryNode.EngineModels.
      */
-    private modelsForEngine(node: ModularNode, engine: ProxyEngine): string[] {
+    private modelsForEngine(node: ModularNode, engine: RoutedEngine): string[] {
         // An engine that advertises only the model it is serving (vLLM) reports
         // its downloaded inventory apart: that is the list to manage, plus
         // anything loaded that is not in it, such as a model served from a local
@@ -2018,13 +2056,13 @@ class ModularBridgeState {
         // Fallback for a pre-attribution peer: the flat union is unattributed, so
         // attribute it only when exactly one proxy engine is active on the node,
         // and never cross-attribute when multiple run.
-        const active = PROXY_ENGINES.filter(candidate =>
+        const active = ROUTED_ENGINES.filter(candidate =>
             this.engineActiveForModels(node, candidate)
         )
         return active.length === 1 && active[0] === engine ? node.models : []
     }
 
-    private toEngineModels(node: ModularNode, engine: ProxyEngine): EngineModels {
+    private toEngineModels(node: ModularNode, engine: RoutedEngine): EngineModels {
         const loaded = loadedNamesForEngine(node, engine)
         return {
             engineType: engine,
@@ -2059,7 +2097,7 @@ class ModularBridgeState {
      */
     private discoveryModelsForNode(
         node: ModularNode | undefined,
-        engine: ProxyEngine,
+        engine: RoutedEngine,
         nodeId: string
     ): EngineModels {
         if (nodeId === this.selfId) {
@@ -2116,7 +2154,7 @@ class ModularBridgeState {
                 nodeId,
                 processStatus: pending,
                 enginePort: facts && facts.running && facts.port > 0 ? facts.port : null,
-                proxyPort: isProxyEngine(engineType) ? this.getProxyPort(engineType) : null
+                proxyPort: isRoutedEngine(engineType) ? this.getProxyPort(engineType) : null
             }
         }
 
@@ -2135,11 +2173,11 @@ class ModularBridgeState {
                 // Each proxy-fronted engine has its own broker proxy
                 // (mapped in proxy-engines.ts); report that engine's bound
                 // proxy port. Loopback-only engines get null.
-                proxyPort: isProxyEngine(engineType) ? this.getProxyPort(engineType) : null
+                proxyPort: isRoutedEngine(engineType) ? this.getProxyPort(engineType) : null
             }
         }
 
-        return node && isProxyEngine(engineType)
+        return node && isRoutedEngine(engineType)
             ? toEngineStatus(node, engineType, this.getProxyPort(engineType))
             : undefined
     }
@@ -2342,7 +2380,11 @@ class ModularBridgeState {
             // engine so the Edit Node proxy port reflects the actually-bound value
             // immediately. Only on a real change so the startup baseline `ready`
             // (and redundant re-readies) stay quiet.
-            if (changed) this.emitLocalEngineStatus(engine)
+            if (changed) {
+                // An engine this proxy hosts reports the same port (see
+                // getProxyPort), so its row is re-emitted from the same `ready`.
+                for (const hosted of enginesOnFacade(engine)) this.emitLocalEngineStatus(hosted)
+            }
             return
         }
 
@@ -2394,7 +2436,7 @@ class ModularBridgeState {
             proxyAddresses: sources.some(entry => entry !== 'broker')
                 ? existing.proxyAddresses
                 : [],
-            engines: setEngine(existing.engines, engine, emptyPresence()),
+            engines: setFacadeEngines(existing.engines, engine, emptyEngines()),
             lastSeen: Date.now()
         }
         this.nodes.set(next.id, next)
@@ -2512,7 +2554,7 @@ class ModularBridgeState {
         // while stopped, so its separate downloaded list must trigger a refresh.
         if (merged.id === this.selfId && existing) {
             const unionChanged = !sameStringList(existing.models, merged.models)
-            for (const engine of PROXY_ENGINES) {
+            for (const engine of ROUTED_ENGINES) {
                 const managerEngine = engineManagerName(engine)
                 const hadEngine = managerEngine in existing.modelsByEngine
                 const hasEngine = managerEngine in merged.modelsByEngine
@@ -2565,7 +2607,7 @@ class ModularBridgeState {
         // peer facts or its advertisement, and is omitted when neither is known.
         // Push per proxy engine so each one lights up independently per node.
         const isSelf = merged.id === this.selfId
-        for (const engine of PROXY_ENGINES) {
+        for (const engine of ROUTED_ENGINES) {
             if (!isSelf) {
                 this.maybeClearRemotePendingFromDiscovery(merged.id, engine, merged)
             }
@@ -2661,7 +2703,7 @@ class ModularBridgeState {
             modelsByEngine: existing.modelsByEngine,
             loadedByEngine: existing.loadedByEngine,
             downloadedByEngine: existing.downloadedByEngine,
-            engines: setEngine(existing.engines, engine, next.engines[engine]),
+            engines: setFacadeEngines(existing.engines, engine, next.engines),
             lastSeen: Math.max(existing.lastSeen, next.lastSeen)
         }
     }

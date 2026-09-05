@@ -142,7 +142,9 @@ describe('proxy engine identity', () => {
                 enginePort: 8081,
                 proxyPort: 8080
             }),
-            expect.objectContaining({ engineType: 'vllm', processStatus: 'not-installed' })
+            expect.objectContaining({ engineType: 'vllm', processStatus: 'not-installed' }),
+            // The peer's listing leaves llama-swap out, so it cannot serve it.
+            expect.objectContaining({ engineType: 'llama-swap', processStatus: 'unsupported' })
         ])
 
         const llamaModels = state

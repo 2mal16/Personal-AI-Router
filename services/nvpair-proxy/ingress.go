@@ -4,14 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strconv"
 )
 
 const engineIdentityProbeHeader = "X-NVPAIR-Engine-Identity-Probe"
@@ -23,52 +23,11 @@ const engineIdentityProbeHeader = "X-NVPAIR-Engine-Identity-Probe"
 // engine, never re-routed to a peer, so the ingress path is strictly terminal
 // and cannot recurse or amplify.
 type localBackend struct {
-	Engine  string `json:"engine"`
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Healthy bool   `json:"healthy"`
-}
-
-// currentLocalBackend snapshots the configured local engine.
-func (f *facade) currentLocalBackend() localBackend {
-	f.backendMu.RLock()
-	defer f.backendMu.RUnlock()
-	return f.backend
-}
-
-// setLocalBackend records (or, with a zero port / unhealthy flag, effectively
-// clears) the local engine this facade's ingress serves.
-//
-// A non-loopback host is rejected rather than stored. The ingress forwards a
-// pin-authenticated peer's request straight here without consulting discovery,
-// so an off-box host would turn this node into a relay to an address chosen by
-// whoever can reach the control channel. The broker only ever sends 127.0.0.1;
-// this is the same defence-in-depth re-validation setLoopbackAlias performs on
-// the alias the broker sends it.
-func (f *facade) setLocalBackend(b localBackend) error {
-	if b.Host != "" && !isLoopbackHost(b.Host) {
-		return fmt.Errorf("local backend host %q is not loopback", b.Host)
-	}
-	f.backendMu.Lock()
-	defer f.backendMu.Unlock()
-	f.backend = b
-	return nil
-}
-
-// localBackendTarget returns the loopback URL of the current local engine, and
-// false when none is set/healthy (the ingress then answers 503 rather than
-// forwarding). The host defaults to 127.0.0.1, and setLocalBackend refuses to
-// store anything that is not loopback, so this is always a loopback target.
-func (f *facade) localBackendTarget() (*url.URL, bool) {
-	b := f.currentLocalBackend()
-	if b.Port <= 0 || !b.Healthy {
-		return nil, false
-	}
-	host := b.Host
-	if host == "" {
-		host = "127.0.0.1"
-	}
-	return &url.URL{Scheme: "http", Host: net.JoinHostPort(host, strconv.Itoa(b.Port))}, true
+	Engine  string   `json:"engine"`
+	Host    string   `json:"host"`
+	Port    int      `json:"port"`
+	Healthy bool     `json:"healthy"`
+	Models  []string `json:"models,omitempty"`
 }
 
 // handlePlain is the plaintext personality: it accepts requests only from
@@ -113,12 +72,29 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 			"client certificate is not a pinned member of this node's cluster")
 		return
 	}
-	target, ok := f.localBackendTarget()
-	if !ok {
+	// A facade hosting several local engines answers a model list from all of
+	// them; a single-engine facade forwards it untouched, as it always has.
+	if r.Method == http.MethodGet && len(f.profile.localEngineNames()) > 1 {
+		if matched, ok := f.profile.routeFor(r.Method, r.URL.Path); ok && matched.Role.isModelList() {
+			_, _ = f.serveModelList(w, r, matched, f.localEngineCandidates(""))
+			return
+		}
+	}
+	// Only an inference route needs its model, and reading it means buffering
+	// the body. Everything else streams to the engine as it always has.
+	model := ""
+	if isInferenceRequest(f.profile, r.Method, r.URL.Path) {
+		body, parsed := bufferBodyAndModel(r, false)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		model = f.profile.normalizeModel(parsed)
+	}
+	candidates := f.localEngineCandidates(model)
+	if len(candidates) == 0 {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",
 			"no local inference backend is available on this node")
 		return
 	}
+	target := candidates[0].url
 	slog.Debug("cluster ingress forwarding to local backend",
 		"peer", peer, "method", r.Method, "path", r.URL.Path, "target", target.Host)
 	f.reverseProxyToLocal(w, r, target)
