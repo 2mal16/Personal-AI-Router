@@ -71,6 +71,25 @@ across nodes, with workload attribution identifying llama-swap requests.
 
 ## Availability and limits
 
+### Fork address exclusions
+
+This fork excludes `172.20.0.1` from local address advertisements and discovered
+peer candidates by default, because overlapping Docker bridges can cause a remote
+node to be mistaken for the local proxy. Other addresses in that subnet remain usable.
+
+Set `NVPAIR_EXCLUDED_ADDRESSES` before starting the desktop or TUI to replace this
+default with a comma-separated list of IP addresses or CIDR ranges, for example:
+
+```bash
+NVPAIR_EXCLUDED_ADDRESSES=172.20.0.1,172.21.0.1 ./nvpair-tui
+```
+
+An explicitly empty value disables these fork exclusions. Invalid entries are
+ignored. Restart PAIR after changing the environment; its workers inherit the
+setting. Configure each node consistently and rebuild/deploy the updated services
+on each node. The source default is in `services/shared/netpick/exclusions.go`.
+This is an address-selection workaround, not a change to node identity checks.
+
 Status and inventory are checked periodically. An unreachable engine stops
 contributing its models; recovery and changes to the configured model list are
 reflected on subsequent sweeps. Healthy engines on the same node remain usable.

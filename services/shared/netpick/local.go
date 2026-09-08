@@ -284,7 +284,7 @@ func rankIfaces(ifaces []localIface, ev Evidence, routeIP string, virtual bool) 
 			// Every Docker host has 172.17.0.1, so a peer told to dial it
 			// reaches its own bridge — and the TCP confirmation in package reach
 			// would succeed there, against the wrong machine.
-			if dockerDefaultBridge(ip4) {
+			if dockerDefaultBridge(ip4) || excludedAddress(ip4.String()) {
 				continue
 			}
 			narrow := a.prefixLen >= maxPrefixLen // -1 (unknown) never disqualifies
