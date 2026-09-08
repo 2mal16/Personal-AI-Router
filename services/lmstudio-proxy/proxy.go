@@ -1635,6 +1635,14 @@ func nodeCandidates(n Node) []string {
 	port := strconv.Itoa(n.Port)
 	sorted := netpick.Candidates(n.TXT, n.Addresses)
 	if len(sorted) == 0 {
+		for _, address := range n.Addresses {
+			if net.ParseIP(address) != nil {
+				return nil
+			}
+		}
+		if net.ParseIP(n.Host) != nil || netpick.IPFromTXT(n.TXT) != "" {
+			return nil
+		}
 		// A non-IP entry (a .local hostname) that netpick cannot parse.
 		hosts := n.Addresses
 		if len(hosts) == 0 {

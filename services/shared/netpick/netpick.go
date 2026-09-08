@@ -194,7 +194,7 @@ func Candidates(txt []string, addrs []string) []string {
 	seen := make(map[string]bool)
 	add := func(a string) {
 		a = strings.TrimSpace(a)
-		if a == "" || seen[a] || len(out) >= noderec.MaxAdvertisedIPs || net.ParseIP(a) == nil {
+		if a == "" || seen[a] || len(out) >= noderec.MaxAdvertisedIPs || net.ParseIP(a) == nil || excludedAddress(a) {
 			return
 		}
 		seen[a] = true
