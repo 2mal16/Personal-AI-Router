@@ -33,6 +33,7 @@ import (
 	"nvpair-shared/netpick"
 	"nvpair-shared/nodeactivity"
 	"nvpair-shared/noderec"
+	"nvpair-shared/proxytune"
 	"nvpair-shared/reach"
 	"nvpair-shared/schedulerwire"
 	"nvpair-shared/splitlisten"
@@ -513,7 +514,6 @@ func (p *Proxy) Run(ctx context.Context) error {
 const (
 	proxyDialTimeout     = 10 * time.Second
 	proxyKeepAlive       = 30 * time.Second
-	proxyResponseTimeout = 120 * time.Second
 	proxyMaxIdleConns    = 50
 	proxyIdleConnTimeout = 90 * time.Second
 	// Inbound http.Server limits — keep IdleTimeout aligned with client
@@ -589,7 +589,7 @@ func (p *Proxy) serveHTTP(ctx context.Context, ln net.Listener) {
 	slog.Info("proxy timeouts configured",
 		"dial_timeout", proxyDialTimeout,
 		"keep_alive", proxyKeepAlive,
-		"response_header_timeout", proxyResponseTimeout,
+		"response_header_timeout", proxytune.ResponseHeaderTimeout(),
 		"max_idle_conns", proxyMaxIdleConns,
 		"idle_conn_timeout", proxyIdleConnTimeout,
 	)
@@ -721,7 +721,7 @@ func newProxyTransport(tlsCfg *tls.Config) *http.Transport {
 			Timeout:   proxyDialTimeout,
 			KeepAlive: proxyKeepAlive,
 		}).DialContext,
-		ResponseHeaderTimeout: proxyResponseTimeout,
+		ResponseHeaderTimeout: proxytune.ResponseHeaderTimeout(),
 		MaxIdleConns:          proxyMaxIdleConns,
 		MaxIdleConnsPerHost:   proxyMaxIdleConns,
 		IdleConnTimeout:       proxyIdleConnTimeout,
