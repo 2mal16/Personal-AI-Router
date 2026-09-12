@@ -90,6 +90,36 @@ setting. Configure each node consistently and rebuild/deploy the updated service
 on each node. The source default is in `services/shared/netpick/exclusions.go`.
 This is an address-selection workaround, not a change to node identity checks.
 
+### Upstream response-header timeout
+
+A proxy waits a bounded time for an engine to return response headers before it
+gives up on that candidate and fails over to the next node. The default is two
+minutes, which suits an engine that already holds the model: it answers in
+milliseconds, and silence that long means it is wedged.
+
+That default is too short for an engine that loads a model on demand. Nothing is
+sent while a model loads — not even headers — so the wait is the load itself.
+vLLM spends that time on weight loading, `torch.compile` and CUDA graph capture,
+and a large model can exceed two minutes. The first request then fails with
+`upstream error: net/http: timeout awaiting response headers` even though the
+load goes on to succeed, and a later request is served normally.
+
+Set `NVPAIR_RESPONSE_HEADER_TIMEOUT` to any Go duration to raise it:
+
+```bash
+NVPAIR_RESPONSE_HEADER_TIMEOUT=10m ./nvpair-tui
+```
+
+Streaming does not avoid this. A request queued behind a busy slot produces no
+bytes at all until the slot frees, so the timeout applies to the wait, not to
+generation. Once a stream starts it is not affected by this setting.
+
+An unset, unparsable or non-positive value yields the default, so a bad setting
+degrades to current behaviour rather than disabling the timeout. Restart PAIR
+after changing the environment; its workers inherit the setting. Configure each
+node consistently and rebuild/deploy the updated services on each node. The
+source default is in `services/shared/proxytune/timeout.go`.
+
 Status and inventory are checked periodically. An unreachable engine stops
 contributing its models; recovery and changes to the configured model list are
 reflected on subsequent sweeps. Healthy engines on the same node remain usable.

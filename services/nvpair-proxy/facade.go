@@ -22,6 +22,7 @@ import (
 	"nvpair-shared/engines"
 	"nvpair-shared/errors"
 	"nvpair-shared/noderec"
+	"nvpair-shared/proxytune"
 	"nvpair-shared/reach"
 	"nvpair-shared/splitlisten"
 )
@@ -488,7 +489,7 @@ func (f *facade) serveHTTP(ctx context.Context, ln net.Listener) {
 	slog.Info("proxy timeouts configured",
 		"dial_timeout", proxyDialTimeout,
 		"keep_alive", proxyKeepAlive,
-		"response_header_timeout", proxyResponseTimeout,
+		"response_header_timeout", proxytune.ResponseHeaderTimeout(),
 		"max_idle_conns", proxyMaxIdleConns,
 		"idle_conn_timeout", proxyIdleConnTimeout,
 	)

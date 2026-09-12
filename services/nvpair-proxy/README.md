@@ -217,6 +217,17 @@ The proxy emits `ready` on startup carrying its bound port, which is the
 authoritative source of where it is listening — do not assume a port before it
 reports one.
 
+## Response-header timeout
+
+How long the proxy waits for an engine's response headers, and for its first
+body byte, before failing over is 120s by default. An engine that loads a model
+on demand sends nothing while it loads, so a cold start of a large model (vLLM
+weight loading, `torch.compile`, CUDA graph capture) can exceed that. Set
+`NVPAIR_RESPONSE_HEADER_TIMEOUT` (a Go duration such as `600s`) on every node
+that serves such models; an unset, unparsable or non-positive value keeps 120s.
+The routing node's outbound transport and the receiving node's cluster ingress
+both read it, so a cluster only benefits once every node has it.
+
 ## Shutdown
 
 Closing stdin (observed as EOF) drains the HTTP server and exits. The broker
