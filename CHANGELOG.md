@@ -11,6 +11,11 @@ published releases on GitHub.
 Builds from this repository are unsigned and configure no update feed, so
 automatic updates are unavailable in them.
 
+## 0.1.7 — Workload broadcast reliability: ordered broadcasts, dedup after emit (#80)
+
+- Inter-node workload broadcasts are now serialized in origin order, so a lifecycle remove can no longer overtake its own upsert on a peer and resurrect a ghost workload.
+- Dedup keys are recorded only after the broker emit succeeds; a failed emit's retry is no longer swallowed as a duplicate.
+
 ## 0.1.6 — The app is now called NVIDIA PAIR (#132)
 
 - The desktop app, tray, shortcuts, and installer now show the name NVIDIA PAIR.
