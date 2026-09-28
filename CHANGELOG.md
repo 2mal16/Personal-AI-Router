@@ -11,6 +11,12 @@ published releases on GitHub.
 Builds from this repository are unsigned and configure no update feed, so
 automatic updates are unavailable in them.
 
+## 0.1.6 — The app is now called NVIDIA PAIR (#132)
+
+- The desktop app, tray, shortcuts, and installer now show the name NVIDIA PAIR.
+- Installed programs lists show NVIDIA Corporation as the publisher.
+- Existing installs keep their settings, engines, cluster membership, and firewall rules when they update.
+
 ## 0.1.5 — Avoid unnecessary cluster trust notifications (#62)
 
 - Cluster trust notifications now follow successfully saved peer endorsements. Duplicate endorsements and failed writes no longer cause unnecessary refreshes.
