@@ -11,6 +11,10 @@ published releases on GitHub.
 Builds from this repository are unsigned and configure no update feed, so
 automatic updates are unavailable in them.
 
+## 0.1.8 — Retry failed scheduler priority notifications (#122)
+
+- The scheduler retries changed priorities after a failed local notification write and keeps its status aligned with the last successful delivery.
+
 ## 0.1.7 — Workload broadcast reliability: ordered broadcasts, dedup after emit (#80)
 
 - Inter-node workload broadcasts are now serialized in origin order, so a lifecycle remove can no longer overtake its own upsert on a peer and resurrect a ghost workload.
