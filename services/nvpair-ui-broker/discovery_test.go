@@ -57,6 +57,29 @@ func TestManualToEnrichedHostUUID(t *testing.T) {
 	}
 }
 
+// TestManualToEnrichedPairedPeer verifies a manual node that is a paired peer
+// (reached over a VPN mDNS doesn't cross) keeps its engine-manager inventory,
+// llama-swap included, and surfaces as a trusted cluster member.
+func TestManualToEnrichedPairedPeer(t *testing.T) {
+	en := manualToEnriched(manualNodeStatus{
+		ID:             "agent",
+		HostUUID:       "peer-uuid",
+		ClusterUUID:    "peer-uuid",
+		Trusted:        true,
+		LMStudioModels: []string{"swap-model"},
+		ModelsByEngine: map[string][]string{"llama-swap": {"swap-model"}},
+	})
+	if got := en.ModelsByEngine["llama-swap"]; len(got) != 1 || got[0] != "swap-model" {
+		t.Fatalf("llama-swap models = %v, want the peer's engine-manager inventory", got)
+	}
+	if _, ok := en.ModelsByEngine["lmstudio"]; ok {
+		t.Fatalf("modelsByEngine = %v, llama-swap models misattributed to lmstudio", en.ModelsByEngine)
+	}
+	if !en.Trusted || !en.Clustered {
+		t.Fatalf("trusted=%v clustered=%v, want a trusted cluster member", en.Trusted, en.Clustered)
+	}
+}
+
 // TestDiscoveryStoreRejectsEmptyKey verifies a node with no operational key is
 // dropped rather than silently keyed by name.
 func TestDiscoveryStoreRejectsEmptyKey(t *testing.T) {

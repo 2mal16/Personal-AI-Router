@@ -39,6 +39,13 @@ type manualNodeStatus struct {
 	// identity as mDNS-discovered nodes (and dedup with itself when the same
 	// machine is also discovered). Empty until the node-info probe succeeds.
 	HostUUID string `json:"hostUuid,omitempty"`
+	// ClusterUUID / Trusted identify a manual node that is a paired PAIR peer
+	// (reached over a VPN or any network mDNS doesn't cross). Its engine fields
+	// above describe its proxies, probed over cluster mTLS, and ModelsByEngine is
+	// its engine-manager's per-engine inventory.
+	ClusterUUID    string              `json:"clusterUuid,omitempty"`
+	Trusted        bool                `json:"trusted,omitempty"`
+	ModelsByEngine map[string][]string `json:"modelsByEngine,omitempty"`
 }
 
 type manualNodeStatusEntry struct {
@@ -89,6 +96,8 @@ func manualToEnriched(s manualNodeStatus) EnrichedNode {
 		Memory:         s.Memory,
 		Models:         mergeModels(s.OllamaModels, s.LMStudioModels),
 		ModelsByEngine: manualModelsByEngine(s),
+		Trusted:        s.Trusted,
+		Clustered:      s.ClusterUUID != "",
 	}
 	if s.Address != "" {
 		en.Addresses = []string{s.Address}
@@ -96,12 +105,17 @@ func manualToEnriched(s manualNodeStatus) EnrichedNode {
 	return en
 }
 
-// manualModelsByEngine builds the per-engine attribution for a manual node from
-// the per-engine lists the prober already collected, keyed by the same
-// engine-manager engine names discovered nodes use ("ollama", "lmstudio") so the
-// two discovery sources present ModelsByEngine identically. An engine with no
-// models adds no key; returns nil when neither engine reports any.
+// manualModelsByEngine builds the per-engine attribution for a manual node,
+// keyed by the same engine-manager engine names discovered nodes use ("ollama",
+// "lmstudio", "llama-swap") so the two discovery sources present ModelsByEngine
+// identically. A paired peer reports its engine-manager's inventory, which is
+// used as is. Otherwise it is built from the lists the prober collected: an
+// engine with no models adds no key, and it returns nil when neither engine
+// reports any.
 func manualModelsByEngine(s manualNodeStatus) map[string][]string {
+	if s.ModelsByEngine != nil {
+		return s.ModelsByEngine
+	}
 	byEngine := map[string][]string{}
 	if len(s.OllamaModels) > 0 {
 		byEngine["ollama"] = s.OllamaModels
@@ -145,6 +159,12 @@ type proxyManualNode struct {
 	Addresses []string `json:"addresses"`
 	TXT       []string `json:"txt,omitempty"`
 	Models    []string `json:"models,omitempty"`
+	// ModelsByEngine attributes Models per engine, so lmstudio-proxy can tell
+	// llama-swap requests from LM Studio ones on a paired peer.
+	ModelsByEngine map[string][]string `json:"modelsByEngine,omitempty"`
+	// ClusterUUID is set for a paired peer. A proxy holding its pin dials the
+	// peer's proxy over cluster mTLS instead of plaintext.
+	ClusterUUID string `json:"clusterUuid,omitempty"`
 }
 
 // bridgeManualNode keeps every supervised proxy's manual-node set in step with
@@ -176,11 +196,15 @@ func (b *Broker) bridgeToProxy(p *proxyProcess, engine string, s manualNodeStatu
 	}
 	if up && s.Address != "" && port > 0 {
 		node := proxyManualNode{
-			ID:        key,
-			Host:      s.Address,
-			Port:      port,
-			Addresses: []string{s.Address},
-			Models:    models,
+			ID:             key,
+			Host:           s.Address,
+			Port:           port,
+			Addresses:      []string{s.Address},
+			Models:         models,
+			ModelsByEngine: s.ModelsByEngine,
+		}
+		if s.Trusted {
+			node.ClusterUUID = s.ClusterUUID
 		}
 		b.callProxyManual(p, engine, "node/add-manual", node, key)
 		return

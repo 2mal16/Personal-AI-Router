@@ -69,6 +69,20 @@ When both engines on one node expose the same model ID, the local endpoint
 selection prefers LM Studio. Normal PAIR node ranking and failover still apply
 across nodes, with workload attribution identifying llama-swap requests.
 
+## Reach a node over a VPN
+
+Nodes find each other with mDNS, which is multicast. WireGuard and Tailscale
+carry only routed unicast traffic, so a paired node on the other end of a tunnel
+is never discovered. Add it as a manual node instead, using its tunnel hostname
+(for example a Tailscale MagicDNS name) or address, with no port.
+
+Manual-node probing recognises a paired PAIR node from the cluster identity its
+node-info reports. It then reads the node's models over cluster mTLS, including
+those served by llama-swap, and routes requests to it over cluster mTLS the same
+way it routes to a discovered peer. The nodes must already be paired: pairing
+itself still needs them on one network. Ports 11434, 1234, 14318 and 14322 on the
+remote node must be reachable through the tunnel.
+
 ## Availability and limits
 
 ### Fork address exclusions

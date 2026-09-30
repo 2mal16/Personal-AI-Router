@@ -369,6 +369,8 @@ Add a node manually (for networks where mDNS is blocked). If the node ID already
 
 The proxy emits a `node/discovered` notification (or `node/updated` if the node was already registered). Manual nodes are a separate overlay that discovery snapshots never touch — they persist until explicitly removed.
 
+An optional `clusterUuid` marks the manual node as a paired PAIR peer, such as one reached over WireGuard or Tailscale where mDNS doesn't cross. When this node holds a pin for that principal, requests are dialed over cluster mTLS to the peer's proxy on `port`, exactly like a discovered peer. Without a pin the node is dialed in plaintext as before. The principal is accepted on this request only and is not echoed on the proxy's `node/*` notifications.
+
 #### `node/remove-manual`
 
 Remove a previously added manual node.

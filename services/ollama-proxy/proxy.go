@@ -1612,8 +1612,10 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 			u.Scheme = "https"
 			peerUUID = n.ClusterUUID
 		case p.discovery.IsManual(n.ID):
-			// An explicit user-added manual node: dialed plain to the address
-			// the user supplied (a deliberate, separately-labeled bypass).
+			// An explicit user-added manual node that isn't a pinned peer (a
+			// paired manual peer carries its ClusterUUID and took the mTLS case
+			// above): dialed plain to the address the user supplied (a
+			// deliberate, separately-labeled bypass).
 		default:
 			// A relay peer we don't hold a pin for (untrusted, or this node is
 			// unclustered). Its engine is loopback-only and its proxy refuses
@@ -2237,11 +2239,19 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 
 	case "node/add-manual":
-		var node Node
-		if err := json.Unmarshal(msg.Params, &node); err != nil {
+		// clusterUuid is inbound-only: a manual node that is a paired peer is
+		// dialed over cluster mTLS like a relay peer, while Node keeps the
+		// principal off its outward notifications.
+		var params struct {
+			Node
+			ClusterUUID string `json:"clusterUuid,omitempty"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
 			p.codec.RespondError(msg.ID, -32602, "invalid params: expected {\"id\",\"host\",\"port\",\"addresses\"}")
 			return
 		}
+		node := params.Node
+		node.ClusterUUID = params.ClusterUUID
 		if node.ID == "" || node.Port == 0 || len(node.Addresses) == 0 {
 			p.codec.RespondError(msg.ID, -32602, "id, port, and at least one address are required")
 			return
