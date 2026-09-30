@@ -65,6 +65,8 @@ Emitted when a manually added node has been probed and its initial status determ
 }
 ```
 
+`clusterUuid` and `modelsByEngine` are present for a node that runs PAIR itself, is paired with this one, and whose identity the current probe verified. See [Paired peers](#paired-peers).
+
 Each node is probed for both inference engines: Ollama on its default `:11434` (`GET /` + `/api/tags`) and LM Studio on its default `:1234` (`GET /v1/models`, which doubles as the liveness check and the model list). `lmstudio_up` / `lmstudio_port` / `lmstudio_models` mirror the `ollama_*` fields and let a supervising broker bridge the node into that engine's `nvpair-proxy` instance the same way it bridges Ollama into its own. A node can run either engine, both, or neither.
 
 ### `node/updated`
@@ -186,6 +188,18 @@ against the current entry, endpoint, and eligibility before they are used.
 Desktop and TUI receive hardware exclusively through broker snapshots and pushes.
 
 The three engine ports are compiled in: only the node-info leg's port can be moved, via `tls_port`. A remote engine on a non-default port is not discovered.
+
+### Paired peers
+
+A PAIR node on a network that mDNS doesn't cross, such as a WireGuard or Tailscale tunnel, can be added as a manual node. On such a node, `11434` and `1234` are PAIR's own proxies, which refuse plaintext from anywhere but loopback, so the plain probes above would report both engines down.
+
+When the pinned node-info read verifies the entry's identity (`identityVerification: "pinned"`), the node is treated as a paired peer for that probe:
+
+- **Ollama** and **LM Studio** legs probe the peer's proxies over cluster mTLS pinned to that principal. The LM Studio leg's model list covers every engine behind the peer's OpenAI-compatible proxy, including llama-swap.
+- **Engine-manager** on port 14322 is read over the same mTLS connection, and its `modelsByEngine` inventory is reported so models are attributed to the engine that serves them.
+- The status carries `clusterUuid`, the verified principal. A supervising broker passes it to the proxies, which then route to the peer over cluster mTLS.
+
+A probe whose node-info read fails or does not verify treats the entry as an unverified configured engine target, like any other: its engines are probed in plaintext, and `clusterUuid` and `modelsByEngine` are dropped. A paired peer's proxies refuse those probes, so a brief node-info failure shows its engines as down until the next verified probe. A node this node holds no pin for is never dialed with this node's cluster identity.
 
 ## Shutdown
 

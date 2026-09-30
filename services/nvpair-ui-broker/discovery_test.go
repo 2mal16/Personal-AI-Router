@@ -681,6 +681,27 @@ func TestManualToEnriched_UnverifiedHostClaimsKeepTheirConfigurationKey(t *testi
 	require.Equal(t, storeKey, noUUID.storeKey(), "store key")
 }
 
+// TestManualToEnrichedPairedPeer verifies a manual node that is a verified
+// paired peer (reached over a VPN mDNS doesn't cross) keeps its engine-manager
+// inventory, llama-swap included, and surfaces as a trusted cluster member.
+func TestManualToEnrichedPairedPeer(t *testing.T) {
+	en := manualToEnriched(manualNodeStatus{
+		ID:                   "agent",
+		IdentityVerification: noderec.IdentityPinned,
+		DiscoveryRecordID:    "record",
+		HostUUID:             "peer-uuid",
+		ClusterUUID:          "peer-uuid",
+		LMStudioModels:       []string{"swap-model"},
+		ModelsByEngine:       map[string][]string{"llama-swap": {"swap-model"}},
+	}, time.Now())
+
+	assert.Equal(t, []string{"swap-model"}, en.ModelsByEngine["llama-swap"], "the peer's engine-manager inventory")
+	assert.NotContains(t, en.ModelsByEngine, "lmstudio", "llama-swap models misattributed to lmstudio")
+	assert.True(t, en.Trusted)
+	assert.True(t, en.Clustered)
+}
+
+
 // TestDiscoveryStoreRejectsEmptyKey verifies a node with no operational key is
 // dropped rather than silently keyed by name.
 func TestDiscoveryStore_RejectsEmptyKey(t *testing.T) {

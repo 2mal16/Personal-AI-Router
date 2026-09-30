@@ -172,11 +172,11 @@ func TestProbeLMStudio_ReportsModels(t *testing.T) {
 	m, _, rt := newTestManager()
 	configureHealthyLMStudio(t, rt, "node.local", []string{"qwen2.5-7b", "llama-3.1-8b"})
 
-	up, models := m.probeLMStudio("node.local", lmStudioPort)
+	up, models := m.probeLMStudio(m.client, "http", "node.local", lmStudioPort)
 	require.True(t, up, "expected lmstudio up")
 	assert.Equal(t, []string{"qwen2.5-7b", "llama-3.1-8b"}, models, "models")
 
-	downUp, downModels := m.probeLMStudio("absent.local", lmStudioPort)
+	downUp, downModels := m.probeLMStudio(m.client, "http", "absent.local", lmStudioPort)
 	require.False(t, downUp, "expected absent lmstudio down, got up (%v, %v)", downUp, downModels)
 	assert.Nil(t, downModels, "expected absent lmstudio down, got up (%v, %v)", downUp, downModels)
 }
@@ -790,7 +790,16 @@ func TestProbeNode_DiscardsOldIdentityAfterHostnameReassignment(t *testing.T) {
 	assert.Empty(t, status[0].GPUs)
 	assert.False(t, status[0].TelemetryValid)
 	targetMu.Lock()
-	assert.Equal(t, []string{f.server.Listener.Addr().String(), replacement.Listener.Addr().String()}, dialed)
+	// The warm probe also reaches the verified peer's engines through its pinned
+	// client, so it dials the original server more than once. The reassigned
+	// probe must open exactly one fresh connection, to the replacement.
+	if assert.GreaterOrEqual(t, len(dialed), 2) {
+		original := dialed[:len(dialed)-1]
+		for _, address := range original {
+			assert.Equal(t, f.server.Listener.Addr().String(), address)
+		}
+		assert.Equal(t, replacement.Listener.Addr().String(), dialed[len(dialed)-1])
+	}
 	targetMu.Unlock()
 }
 
