@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"strconv"
@@ -78,6 +80,10 @@ type NodeInfoResponse struct {
 	// machine if it's also discovered over mDNS. Empty when the remote
 	// predates this field or isn't a NVPAIR node-info server.
 	HostUUID string `json:"hostUuid,omitempty"`
+	// ClusterUUID is the remote's cluster principal (its mTLS cert UUID), present
+	// only while it belongs to a cluster. When this node holds a pin for it, the
+	// manual node is a paired peer and its engines are probed over cluster mTLS.
+	ClusterUUID string `json:"clusterUuid,omitempty"`
 }
 
 // ManualEntry is the user-supplied identity of a manually added
@@ -128,6 +134,16 @@ type ManualNodeStatus struct {
 	// manual node carries the same permanent identity the rest of the system
 	// keys on. Empty when node-info didn't report one.
 	HostUUID string `json:"hostUuid,omitempty"`
+	// ClusterUUID is the remote's cluster principal from node-info. Trusted
+	// reports whether this node holds a pin for it, which makes the manual node
+	// a paired peer: its engine probes above went over cluster mTLS to the
+	// peer's proxies, and a broker routes to it the same way.
+	ClusterUUID string `json:"clusterUuid,omitempty"`
+	Trusted     bool   `json:"trusted,omitempty"`
+	// ModelsByEngine is a paired peer's per-engine inventory from its
+	// engine-manager (e.g. "ollama", "lmstudio", "llama-swap"). Absent for a
+	// node that isn't a paired peer.
+	ModelsByEngine map[string][]string `json:"modelsByEngine,omitempty"`
 }
 
 type ReadyParams struct {
@@ -168,6 +184,9 @@ type Manager struct {
 	// currently-pinned server cert) since a clustered peer's node-info is
 	// pin-gated and serves no plaintext listener.
 	mesh *clustertrust.Mesh
+	// peerTransport builds the round-tripper for a paired peer's pinned mTLS
+	// config. Tests swap it for a fake that records the requests.
+	peerTransport func(*tls.Config) http.RoundTripper
 
 	mu    sync.RWMutex
 	nodes map[string]*trackedNode
@@ -189,7 +208,10 @@ func NewManager(codec *Codec, tlsOpts tlsClientOptions, mesh *clustertrust.Mesh)
 			Transport: noKeepAliveTransport(),
 		},
 		tlsClient: tlsClient,
-		nodes:     make(map[string]*trackedNode),
+		peerTransport: func(cfg *tls.Config) http.RoundTripper {
+			return &http.Transport{TLSClientConfig: cfg, DisableKeepAlives: true}
+		},
+		nodes: make(map[string]*trackedNode),
 	}, nil
 }
 
@@ -251,9 +273,6 @@ func (m *Manager) probeNode(entry ManualEntry) {
 	addr := entry.Address
 	id := nodeID(entry)
 
-	ollamaUp, ollamaModels := m.probeOllama(addr, 11434)
-	lmStudioUp, lmStudioModels := m.probeLMStudio(addr, lmStudioPort)
-
 	// Pick scheme + port + client based on the entry's TLS hint.
 	// The operator decides which scheme this manual node uses; we
 	// don't probe both. TLSPort > 0 means HTTPS on that port via
@@ -280,6 +299,28 @@ func (m *Manager) probeNode(entry ManualEntry) {
 	}
 	nodeInfoUp, info := m.probeNodeInfo(probeClient, scheme, addr, nodeInfoPort)
 
+	// A failed node-info probe reports no cluster principal; keep the last one
+	// learned so a transient blip doesn't drop a paired peer back to plaintext
+	// probes its proxies refuse.
+	clusterUUID := info.ClusterUUID
+	if !nodeInfoUp {
+		clusterUUID = m.lastClusterUUID(id)
+	}
+	// A paired peer runs PAIR itself: 11434 and 1234 are its proxies, which
+	// refuse plaintext from anywhere but loopback. Probe them over cluster mTLS
+	// pinned to its principal instead, and read its per-engine inventory
+	// (including engines the plain probes can't see, such as llama-swap) from
+	// its engine-manager.
+	engineClient, engineScheme := m.client, "http"
+	var modelsByEngine map[string][]string
+	peerClient, trusted := m.peerClient(clusterUUID)
+	if trusted {
+		engineClient, engineScheme = peerClient, "https"
+		modelsByEngine = m.fetchModelsByEngine(peerClient, addr)
+	}
+	ollamaUp, ollamaModels := m.probeOllama(engineClient, engineScheme, addr, 11434)
+	lmStudioUp, lmStudioModels := m.probeLMStudio(engineClient, engineScheme, addr, lmStudioPort)
+
 	newStatus := ManualNodeStatus{
 		ID:             id,
 		Name:           entry.Name,
@@ -300,6 +341,9 @@ func (m *Manager) probeNode(entry ManualEntry) {
 		TelemetryValid: info.TelemetryValid,
 		MSSince:        info.MSSince,
 		HostUUID:       info.HostUUID,
+		ClusterUUID:    clusterUUID,
+		Trusted:        trusted,
+		ModelsByEngine: modelsByEngine,
 	}
 
 	reachable := newStatus.OllamaUp || newStatus.LMStudioUp || newStatus.NodeInfoUp
@@ -333,6 +377,9 @@ func (m *Manager) probeNode(entry ManualEntry) {
 		prev.LMStudioUp != newStatus.LMStudioUp ||
 		prev.NodeInfoUp != newStatus.NodeInfoUp ||
 		prev.HostUUID != newStatus.HostUUID ||
+		prev.ClusterUUID != newStatus.ClusterUUID ||
+		prev.Trusted != newStatus.Trusted ||
+		!modelsByEngineEqual(prev.ModelsByEngine, newStatus.ModelsByEngine) ||
 		!sliceEqual(prev.OllamaModels, newStatus.OllamaModels) ||
 		!sliceEqual(prev.LMStudioModels, newStatus.LMStudioModels) ||
 		!gpusEqual(prev.GPUs, newStatus.GPUs) ||
@@ -344,7 +391,8 @@ func (m *Manager) probeNode(entry ManualEntry) {
 	if changed {
 		slog.Info("manual node state changed",
 			"node_id", id, "addr", addr,
-			"ollama_up", newStatus.OllamaUp, "node_info_up", newStatus.NodeInfoUp,
+			"ollama_up", newStatus.OllamaUp, "lmstudio_up", newStatus.LMStudioUp,
+			"node_info_up", newStatus.NodeInfoUp, "trusted", newStatus.Trusted,
 			"models", len(newStatus.OllamaModels), "gpus", len(newStatus.GPUs))
 		m.codec.Notify("node/updated", newStatus)
 	} else {
@@ -403,14 +451,73 @@ func probeFailedID(nodeID string) string {
 // manager (which only governs the local engine).
 const lmStudioPort = 1234
 
-// probeLMStudio checks LM Studio's OpenAI-compatible server on addr:port. A
-// single GET /v1/models doubles as the liveness check and the model list (the
-// response is {"data":[{"id":"..."}],...}). Returns whether it is up and the
-// model ids it serves.
-func (m *Manager) probeLMStudio(addr string, port int) (bool, []string) {
-	url := "http://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/v1/models"
+// engineManagerPort is nvpair-engine-manager's fixed cluster HTTP endpoint (the
+// broker's engineManagerHTTPPort). A paired peer serves its per-engine model
+// inventory there over cluster mTLS.
+const engineManagerPort = 14322
+
+// peerClient returns a probe client pinned to clusterUUID when this node is a
+// cluster member holding a pin for it. ok is false for an unclustered node, an
+// unknown principal, or a node that isn't a paired peer — those are probed in
+// plaintext as before. Refreshes the mesh first so a pairing made after startup
+// is picked up without a restart.
+func (m *Manager) peerClient(clusterUUID string) (*http.Client, bool) {
+	if clusterUUID == "" {
+		return nil, false
+	}
+	m.mesh.Refresh()
+	cfg, ok := m.mesh.ClientTLSConfig(clusterUUID)
+	if !ok {
+		return nil, false
+	}
+	return &http.Client{Timeout: probeTimeout, Transport: m.peerTransport(cfg)}, true
+}
+
+// lastClusterUUID returns the cluster principal the node's previous probe
+// learned, or "" when it isn't tracked.
+func (m *Manager) lastClusterUUID(id string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if tn, ok := m.nodes[id]; ok {
+		return tn.status.ClusterUUID
+	}
+	return ""
+}
+
+// fetchModelsByEngine reads a paired peer's per-engine inventory from its
+// engine-manager /v1/models ({"modelsByEngine":{"ollama":[...],...}}). Returns
+// nil when the fetch fails, which leaves the caller with the proxy-probed lists.
+func (m *Manager) fetchModelsByEngine(client *http.Client, addr string) map[string][]string {
+	url := "https://" + net.JoinHostPort(addr, strconv.Itoa(engineManagerPort)) + "/v1/models"
+	resp, err := client.Get(url)
+	if err != nil {
+		slog.Debug("manual probe engine-manager failed", "addr", addr, "err", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("manual probe engine-manager non-OK", "addr", addr, "status", resp.StatusCode)
+		return nil
+	}
+	var body struct {
+		ModelsByEngine map[string][]string `json:"modelsByEngine"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		slog.Debug("manual probe engine-manager decode failed", "addr", addr, "err", err)
+		return nil
+	}
+	return body.ModelsByEngine
+}
+
+// probeLMStudio checks an OpenAI-compatible server on addr:port: LM Studio
+// itself on a plain node, or a paired peer's lmstudio-proxy (fronting LM Studio
+// and llama-swap) over mTLS. A single GET /v1/models doubles as the liveness
+// check and the model list (the response is {"data":[{"id":"..."}],...}).
+// Returns whether it is up and the model ids it serves.
+func (m *Manager) probeLMStudio(client *http.Client, scheme, addr string, port int) (bool, []string) {
+	url := scheme + "://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/v1/models"
 	start := time.Now()
-	resp, err := m.client.Get(url)
+	resp, err := client.Get(url)
 	if err != nil {
 		slog.Debug("manual probe lmstudio failed",
 			"addr", addr, "port", port, "duration_ms", time.Since(start).Milliseconds(), "err", err)
@@ -446,10 +553,10 @@ func (m *Manager) probeLMStudio(addr string, port int) (bool, []string) {
 	return true, models
 }
 
-func (m *Manager) probeOllama(addr string, port int) (bool, []string) {
-	url := "http://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/"
+func (m *Manager) probeOllama(client *http.Client, scheme, addr string, port int) (bool, []string) {
+	url := scheme + "://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/"
 	start := time.Now()
-	resp, err := m.client.Get(url)
+	resp, err := client.Get(url)
 	if err != nil {
 		slog.Debug("manual probe ollama failed",
 			"addr", addr, "port", port, "duration_ms", time.Since(start).Milliseconds(), "err", err)
@@ -463,16 +570,16 @@ func (m *Manager) probeOllama(addr string, port int) (bool, []string) {
 		return false, nil
 	}
 
-	models := m.fetchOllamaModels(addr, port)
+	models := m.fetchOllamaModels(client, scheme, addr, port)
 	slog.Debug("manual probe ollama up",
 		"addr", addr, "port", port, "models", len(models),
 		"duration_ms", time.Since(start).Milliseconds())
 	return true, models
 }
 
-func (m *Manager) fetchOllamaModels(addr string, port int) []string {
-	url := "http://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/api/tags"
-	resp, err := m.client.Get(url)
+func (m *Manager) fetchOllamaModels(client *http.Client, scheme, addr string, port int) []string {
+	url := scheme + "://" + net.JoinHostPort(addr, strconv.Itoa(port)) + "/api/tags"
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil
 	}
@@ -711,6 +818,10 @@ func sliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func modelsByEngineEqual(a, b map[string][]string) bool {
+	return maps.EqualFunc(a, b, sliceEqual)
 }
 
 func gpusEqual(a, b []GPUInfo) bool {

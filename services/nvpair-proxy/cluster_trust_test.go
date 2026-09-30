@@ -4,11 +4,13 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"nvpair-shared/clustertrust"
 	"nvpair-shared/clustertrusttest"
+	"nvpair-shared/engines"
 )
 
 // TestResolveCandidatesFollowsLivePinSet reproduces the join ordering that made
@@ -77,5 +79,47 @@ func TestResolveCandidatesRejectsUnpinnedClusteredPeer(t *testing.T) {
 
 	if got := p.soleFacade().resolveCandidates(""); len(got) != 0 {
 		t.Fatalf("candidates = %+v, want none for a peer in another cluster", got)
+	}
+}
+
+// TestManualPairedPeerRoutesOverMTLS covers a paired peer added by hand because
+// mDNS can't reach it (a VPN such as WireGuard or Tailscale). node/add-manual
+// carries its cluster principal, so routing dials its proxy over cluster mTLS;
+// without the principal, or without a pin for it, the entry stays a plain manual
+// target.
+func TestManualPairedPeerRoutesOverMTLS(t *testing.T) {
+	const peerUUID = "principal-vpn-peer"
+	clusterDir := filepath.Join(t.TempDir(), "cluster")
+	clustertrusttest.Join(t, clusterDir, "cluster-xyz", "principal-self", peerUUID)
+
+	for _, tc := range []struct {
+		name        string
+		clusterUUID string
+		wantScheme  string
+		wantPeer    string
+	}{
+		{name: "pinned", clusterUUID: peerUUID, wantScheme: "https", wantPeer: peerUUID},
+		{name: "unpinned", clusterUUID: "principal-stranger", wantScheme: "http"},
+		{name: "plain", wantScheme: "http"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := testProxy(lmstudioProfile(t), NewDiscovery(), 1235)
+			host.mesh = clustertrust.Open(clusterDir)
+			p := host.soleFacade()
+			params, _ := json.Marshal(map[string]any{
+				"id": "vpn-peer", "host": "peer.tailnet.ts.net", "port": 1234,
+				"addresses": []string{"192.0.2.40"}, "clusterUuid": tc.clusterUUID,
+			})
+			id := json.RawMessage(`1`)
+			host.handleMessage(&Message{JSONRPC: "2.0", ID: &id, Method: engines.AddressMethod("lmstudio", "node/add-manual"), Params: params})
+
+			cands := p.resolveCandidates("")
+			if len(cands) != 1 {
+				t.Fatalf("candidates = %+v, want the manual peer", cands)
+			}
+			if cands[0].url.Scheme != tc.wantScheme || cands[0].peerUUID != tc.wantPeer {
+				t.Fatalf("candidate = %+v, want scheme %s pinned to %q", cands[0], tc.wantScheme, tc.wantPeer)
+			}
+		})
 	}
 }

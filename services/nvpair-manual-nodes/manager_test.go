@@ -140,7 +140,7 @@ func TestProbeLMStudioReportsModels(t *testing.T) {
 	m, _, rt := newTestManager()
 	configureHealthyLMStudio(rt, "node.local", []string{"qwen2.5-7b", "llama-3.1-8b"})
 
-	up, models := m.probeLMStudio("node.local", lmStudioPort)
+	up, models := m.probeLMStudio(m.client, "http", "node.local", lmStudioPort)
 	if !up {
 		t.Fatal("expected lmstudio up")
 	}
@@ -148,7 +148,7 @@ func TestProbeLMStudioReportsModels(t *testing.T) {
 		t.Fatalf("models = %#v", models)
 	}
 
-	downUp, downModels := m.probeLMStudio("absent.local", lmStudioPort)
+	downUp, downModels := m.probeLMStudio(m.client, "http", "absent.local", lmStudioPort)
 	if downUp || downModels != nil {
 		t.Fatalf("expected absent lmstudio down, got up=%v models=%#v", downUp, downModels)
 	}

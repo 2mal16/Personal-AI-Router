@@ -60,6 +60,8 @@ Emitted when a manually added node has been probed and its initial status determ
 }
 ```
 
+`clusterUuid`, `trusted`, and `modelsByEngine` are present for a node that runs PAIR itself and is paired with this one. See [Paired peers](#paired-peers).
+
 Each node is probed for both inference engines: Ollama on its default `:11434` (`GET /` + `/api/tags`) and LM Studio on its default `:1234` (`GET /v1/models`, which doubles as the liveness check and the model list). `lmstudio_up` / `lmstudio_port` / `lmstudio_models` mirror the `ollama_*` fields and let a supervising broker bridge the node into that engine's `nvpair-proxy` instance the same way it bridges Ollama into its own. A node can run either engine, both, or neither.
 
 ### `node/updated`
@@ -141,6 +143,18 @@ Each manual node is probed every 10 seconds, with a 3-second timeout per leg, fo
 A node can have any combination of these, or none if the target is unreachable. Status changes trigger `node/updated` events. Because change detection compares CPU, memory, and GPU values, a node running node-info emits a `node/updated` on most probe cycles as utilization moves.
 
 The three engine ports are compiled in: only the node-info leg's port can be moved, via `tls_port`. A remote engine on a non-default port is not discovered.
+
+### Paired peers
+
+A PAIR node on a network that mDNS doesn't cross, such as a WireGuard or Tailscale tunnel, can be added as a manual node. On such a node, `11434` and `1234` are PAIR's own proxies, which refuse plaintext from anywhere but loopback, so the plain probes above would report both engines down.
+
+When node-info reports a `clusterUuid` that this node holds a pin for (with `--cluster-dir` set), the node is treated as a paired peer:
+
+- **Ollama** and **LM Studio** legs probe the peer's proxies over cluster mTLS pinned to that principal. The LM Studio leg's model list covers every engine behind the peer's OpenAI-compatible proxy, including llama-swap.
+- **Engine-manager** on port 14322 is read over the same mTLS connection, and its `modelsByEngine` inventory is reported so models are attributed to the engine that serves them.
+- The status carries `clusterUuid` and `trusted: true`. A supervising broker passes the principal to the proxies, which then route to the peer over cluster mTLS.
+
+The last-learned `clusterUuid` is kept through a failed node-info probe, so a brief blip doesn't drop the peer back to plaintext probes. A node in a cluster this node holds no pin for is probed in plaintext and is not dialed with this node's cluster identity.
 
 ## Shutdown
 

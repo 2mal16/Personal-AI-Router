@@ -174,6 +174,13 @@ One limit is outside the proxy's control: current Chromium-based browsers gate a
 - **Manual**: `node/select` pins traffic to a specific node. A manual pin
   **overrides the priority list only when that node is eligible** for the
   requested model.
+- **Manual nodes**: `node/add-manual` accepts an optional `clusterUuid` marking
+  the node as a paired PAIR peer, such as one reached over WireGuard or
+  Tailscale where mDNS does not cross. When this node holds a pin for that
+  principal, requests are dialed over cluster mTLS to the peer's proxy on
+  `port`, exactly like a discovered peer. Without a pin the node is dialed in
+  plaintext as before. The principal is accepted on this request only and is not
+  echoed on the proxy's `node/*` notifications.
 - **Failover**: If the selected node disappears from the discovery set, the
   proxy falls back to auto-select and emits `node/selection-changed`. A
   transport error or retryable status, including a model `404` from an
