@@ -11,6 +11,11 @@ published releases on GitHub.
 Builds from this repository are unsigned and configure no update feed, so
 automatic updates are unavailable in them.
 
+## 0.1.9 — Clearer in-flight jobs (#141)
+
+- Jobs that have not started yet are labeled In flight, and they and their connection lines use the same yellow as the GPU chart.
+- A job's card names the node it was sent to with "Sent to" until the job starts, including a job that fails or is cancelled before it starts, instead of "Ran on".
+
 ## 0.1.8 — Retry failed scheduler priority notifications (#122)
 
 - The scheduler retries changed priorities after a failed local notification write and keeps its status aligned with the last successful delivery.
