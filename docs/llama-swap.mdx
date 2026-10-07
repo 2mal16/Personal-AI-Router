@@ -84,6 +84,12 @@ way it routes to a discovered peer. The nodes must already be paired: pairing
 itself still needs them on one network. Ports 11434, 1234, 14318 and 14322 on the
 remote node must be reachable through the tunnel.
 
+Manual nodes are saved by the broker to `manual-nodes.json` in PAIR's per-user
+data directory and re-added whenever the manual-nodes service starts, so they
+survive a restart in the TUI and headless runs too. Removing a node removes it
+from that file. If the node's tunnel address changes, add it again under the
+same name and the saved entry is updated.
+
 ## Availability and limits
 
 ### Fork address exclusions

@@ -323,8 +323,10 @@ type Broker struct {
 	// alias is reprojected from manualNodeStatuses (its last-seen payload) so the
 	// removed alias's address/models don't linger (the survivor's own periodic
 	// probe emits no update while its status is unchanged).
-	manualMu           sync.Mutex
-	manualNodeKeys     map[string]string
+	manualMu       sync.Mutex
+	manualNodeKeys map[string]string
+	// manualStore keeps manual nodes across restarts (see manualpersist.go).
+	manualStore        *manualNodeStore
 	manualNodeStatuses map[string]manualNodeStatusEntry
 
 	// schedMu guards the cached ranking and its generation.
@@ -413,6 +415,7 @@ func NewBroker(codec *Codec, paths workerPaths) *Broker {
 		relayDir:           relay.NewDirectory(),
 		regCache:           relay.NewRegistrationCache(),
 		manualNodeKeys:     make(map[string]string),
+		manualStore:        newManualNodeStore(),
 		manualNodeStatuses: make(map[string]manualNodeStatusEntry),
 		workloads:          workloadstore.New(),
 		ollamaPortReady:    make(chan struct{}),
@@ -1148,6 +1151,7 @@ func (b *Broker) spawnManualNodes() (supervisedHandle, error) {
 		return nil, err
 	}
 	b.setManualNodes(w)
+	b.replayManualNodes(w)
 	slog.Info("manual-nodes started", "path", b.manualNodesPath, "pid", w.cmd.Process.Pid)
 	return w, nil
 }
@@ -1694,7 +1698,8 @@ func (b *Broker) survivingAliasLocked(key string) (manualNodeStatusEntry, bool) 
 // the discovery store. The restarted process comes up with no entries (it
 // keeps no persistent state and the broker doesn't re-feed them), so
 // leaving the old manual nodes in the snapshot would strand stale entries
-// that never age out. Clients re-add manual nodes after a restart.
+// that never age out. The saved list (manualpersist.go) is replayed when the
+// worker is started again.
 func (b *Broker) clearManualNodesState() {
 	b.setManualNodes(nil)
 	b.manualMu.Lock()
@@ -3545,6 +3550,7 @@ func (b *Broker) relayToManualNodes(msg *Message) {
 	}
 	id := msg.ID
 	method := msg.Method
+	params := msg.Params
 	relayErr := mn.RelayRequest(method, msg.Params, func(result json.RawMessage, rpcErr *RPCError, err error) {
 		switch {
 		case err != nil:
@@ -3556,6 +3562,7 @@ func (b *Broker) relayToManualNodes(msg *Message) {
 				log.Printf("failed to relay manual-nodes error for %s: %v", method, e)
 			}
 		default:
+			b.recordManualNodeRequest(method, params)
 			if e := b.codec.Respond(id, result); e != nil {
 				log.Printf("failed to relay manual-nodes result for %s: %v", method, e)
 			}
