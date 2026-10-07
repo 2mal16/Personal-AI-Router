@@ -817,15 +817,6 @@ type candidate struct {
 	peerUUID string
 }
 
-// engineName is the engine to attribute work sent to this candidate to,
-// falling back to the facade's own when the candidate does not name one.
-func (c candidate) engineName(fallback string) string {
-	if c.engine != "" {
-		return c.engine
-	}
-	return fallback
-}
-
 // candidateTransport returns the reverse-proxy / model-list transport for a
 // candidate. Plain/self/manual candidates share one long-lived Transport.
 // Cluster peers share one long-lived mTLS Transport per peerUUID. Callers must

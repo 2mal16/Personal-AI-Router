@@ -24,7 +24,6 @@ import (
 	"strings"
 
 	"nvpair-shared/engines"
-	"nvpair-shared/noderec"
 )
 
 // routeRole classifies an inbound request path. It carries the HTTP method
@@ -125,28 +124,6 @@ type engineProfile struct {
 	// node/set-local-backend to this facade with the engine named in the
 	// payload. Empty means the facade fronts only its own engine.
 	LocalEngines []string
-}
-
-// localEngineNames returns the engines this facade fronts locally, preferred
-// first. It is never empty: a profile that lists none fronts its own engine.
-func (p engineProfile) localEngineNames() []string {
-	if len(p.LocalEngines) == 0 {
-		return []string{p.Name}
-	}
-	return p.LocalEngines
-}
-
-// nodeModels is the model inventory a peer advertises for this facade: its own
-// engine's models plus those of every other engine the facade fronts, so a
-// model only llama-swap serves still makes the node an eligible owner.
-func (p engineProfile) nodeModels(n noderec.DirectoryNode) []string {
-	models := append([]string(nil), n.EngineModels(p.Name)...)
-	for _, name := range p.localEngineNames() {
-		if name != p.Name {
-			models = append(models, n.ModelsByEngine[name]...)
-		}
-	}
-	return models
 }
 
 // ollamaBaseRoutes is the engine-specific surface that Ollama exposes before

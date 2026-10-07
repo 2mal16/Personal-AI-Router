@@ -226,3 +226,25 @@ they bound loopback ports and advertised over mDNS for the duration of the run,
 then shut down. No node configuration was written and the installed PAIR
 application kept running throughout. Still untested: live three-node behavior,
 and no inference has been sent to the user's servers.
+
+## 2026-10-07 — rebased onto upstream/develop (0.1.9)
+
+Upstream merged `ollama-proxy` and `lmstudio-proxy` into one `nvpair-proxy`
+(one facade per engine) and added engine settings. The branch
+`feat/llama-swap-on-develop` carries this work over:
+
+- llama-swap is still not a facade. `engineProfile.LocalEngines` on the lmstudio
+  profile lists it; the code is in `services/nvpair-proxy/localengines.go`.
+  The broker addresses `node/set-local-backend` to the `lmstudio` facade with
+  `engine: "llama-swap"` in the payload.
+- Workload `engine` is fixed at creation (the store keys on it), no longer
+  re-pointed on failover.
+- A single-engine facade (Ollama) keeps no inventory and does not filter.
+- The two engine-manager guard tests exempt externally managed engines.
+- The response-header timeout now also governs `firstBodyTimeout`.
+- Dropped: the separate `llama-swap` scheduler emission (upstream ranking is
+  node-wide and fanned out to every proxy) and the desktop port editor
+  (`PortsSection`, replaced upstream by engine settings, which only edits
+  engines with launch commands).
+- Not run: the desktop tests (`desktop/node_modules` is absent) and any live
+  llama-swap traffic.

@@ -181,16 +181,3 @@ func (d *Discovery) IsManual(id string) bool {
 	_, exists := d.manualNodes[id]
 	return exists
 }
-
-// engineForModel names which of engines advertises model on this node, for
-// attributing work to the engine that serves it. The first engine in the list
-// wins a duplicate id, matching local routing preference; with no model, or one
-// no inventory lists, it falls back to the first engine.
-func (n Node) engineForModel(engines []string, model string) string {
-	for _, name := range engines {
-		if slices.Contains(n.ModelsByEngine[name], model) {
-			return name
-		}
-	}
-	return engines[0]
-}

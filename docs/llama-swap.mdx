@@ -26,13 +26,14 @@ engine is labelled `(external)` and its lifecycle commands are unavailable.
    `http://127.0.0.1:10000/v1/models` is accessible on that same machine.
 3. Start PAIR. It checks port 10000 automatically. In the desktop's node Engine
    settings, expand llama-swap to see its model inventory and connection port.
-4. If llama-swap uses another port, change its **Server** port in the local
-   llama-swap row. This changes where PAIR connects; it does not reconfigure or
-   restart llama-swap. Port edits apply to the local node only.
+4. If llama-swap uses another port, override it with the manifest below. The
+   engine settings panel does not edit an externally managed engine's port,
+   because PAIR launches nothing for it. This changes where PAIR connects; it
+   does not reconfigure or restart llama-swap, and it applies to the local node only.
 5. Pair the nodes through the normal PAIR pairing flow. After discovery refreshes,
    peers see the models attributed to llama-swap.
 
-For a headless node with a nondefault port, save this manifest override as
+For a node with a nondefault port, save this manifest override as
 `engines/llama-swap.json` in PAIR's per-user data directory before starting PAIR:
 
 ```json

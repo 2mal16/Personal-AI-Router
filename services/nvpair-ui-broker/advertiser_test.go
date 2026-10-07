@@ -160,10 +160,11 @@ func TestSetOpenAIEngineOmitsUnknownInventory(t *testing.T) {
 	proxyClient, proxyServer := net.Pipe()
 	defer proxyClient.Close()
 	defer proxyServer.Close()
-	proxy := &proxyProcess{peer: NewPeer(NewCodec(proxyClient)), ready: true, port: defaultLMStudioPort}
+	proxy := &proxyProcess{peer: NewPeer(NewCodec(proxyClient)), facadeState: readyFacade(lmstudioProxyProfile.Name, defaultLMStudioPort)}
 	go proxy.peer.Serve(nil, nil)
 
 	params := make(chan map[string]json.RawMessage, 4)
+	methods := make(chan string, 4)
 	go func() {
 		codec := NewCodec(proxyServer)
 		for {
@@ -173,6 +174,7 @@ func TestSetOpenAIEngineOmitsUnknownInventory(t *testing.T) {
 			}
 			var got map[string]json.RawMessage
 			if json.Unmarshal(msg.Params, &got) == nil {
+				methods <- msg.Method
 				params <- got
 			}
 			_ = codec.Respond(msg.ID, map[string]bool{"ok": true})
@@ -194,14 +196,22 @@ func TestSetOpenAIEngineOmitsUnknownInventory(t *testing.T) {
 	}
 
 	b.setOpenAIEngine("llama-swap", 10000, true, []string{"chat-model"}, true)
+	// llama-swap rides the lmstudio facade, so the call is addressed to that
+	// facade (the proxy only splits a known engine id off a method) and names
+	// llama-swap in the payload.
+	if m := <-methods; m != "lmstudio:node/set-local-backend" {
+		t.Fatalf("method = %q, want it addressed to the lmstudio facade", m)
+	}
 	if got := next(); string(got["models"]) != `["chat-model"]` {
 		t.Fatalf("known inventory sent %s, want [\"chat-model\"]", got["models"])
 	}
 	b.setOpenAIEngine("llama-swap", 10000, true, nil, true)
+	<-methods
 	if got := next(); string(got["models"]) != `[]` {
 		t.Fatalf("known empty inventory sent %s, want []", got["models"])
 	}
 	b.setOpenAIEngine("llama-swap", 10000, true, nil, false)
+	<-methods
 	got := next()
 	if raw, ok := got["models"]; ok {
 		t.Fatalf("unknown inventory sent models = %s, want the field omitted", raw)

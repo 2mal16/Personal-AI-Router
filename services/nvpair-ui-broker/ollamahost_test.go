@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"nvpair-shared/appdir"
 	"nvpair-shared/errors"
 )
 

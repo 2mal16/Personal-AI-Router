@@ -20,6 +20,9 @@ GO_MODULES := $(patsubst %/go.mod,%,$(wildcard $(SERVICES)/*/go.mod))
 MIN_GO := 1.25
 MIN_NODE := 25.5.0
 
+NVPAIR_RESPONSE_HEADER_TIMEOUT ?= 600s
+export NVPAIR_RESPONSE_HEADER_TIMEOUT
+
 .PHONY: help dev tools deps-go deps-node build build-binaries build-desktop \
 	build-services run check verify lint typecheck contracts headers \
 	headers-fix test test-desktop test-services clean
