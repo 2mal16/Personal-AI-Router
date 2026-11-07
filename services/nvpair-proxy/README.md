@@ -132,6 +132,21 @@ On the llama.cpp facade, `GET /models` and `GET /v1/models` return the same
 fleet inventory across llama.cpp candidates, even when a node is selected.
 Point your client at the proxy and it handles routing.
 
+The merged list keeps the first record of a model that several nodes advertise,
+so each record names every node that advertised it, in candidate order:
+
+```json
+{"id": "shared", "meta": {"pair": {"nodes": [
+  {"id": "<host uuid>", "host": "cachy"},
+  {"id": "<host uuid>", "host": "agent", "engine": "llama-swap"}
+]}}}
+```
+
+`id` is the node's discovery ID, `host` its display name, and `engine` the local
+engine behind the facade that answered (omitted for the facade's own). The
+record's other `meta` members are kept. A record that is not a JSON object, or
+whose `meta` is not one, is passed through unchanged.
+
 When the broker supplies `aliasAddresses`, the facade reserves that
 loopback-only endpoint before reporting ready and serves it through the same
 routing and workload-lifecycle handler. A `localhost` alias reserves `127.0.0.1`

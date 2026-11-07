@@ -846,8 +846,11 @@ func (p *Proxy) emitWorkload(method string, w Workload) {
 type candidate struct {
 	// engine names which engine behind the facade this candidate reaches; empty
 	// means the facade's own. It is attribution only, never part of routing.
-	engine   string
-	id       string
+	engine string
+	id     string
+	// host is the node's display name (Node.Host). Like engine it is
+	// attribution only: the federated model list names it per record.
+	host     string
 	url      *url.URL
 	peerUUID string
 }
@@ -954,6 +957,57 @@ type modelListItem struct {
 	raw    json.RawMessage
 }
 
+// modelListOwner is one node that advertised a record of the federated model
+// list: its discovery ID, display name, and the engine behind the facade that
+// answered (empty for the facade's own engine).
+type modelListOwner struct {
+	ID     string `json:"id"`
+	Host   string `json:"host,omitempty"`
+	Engine string `json:"engine,omitempty"`
+}
+
+// withModelOwners returns raw with meta.pair.nodes set to owners, so a client
+// can tell which nodes serve a pooled model. Other keys, meta's other members
+// among them, are kept. A record that is not a JSON object, or whose meta is
+// not one, is returned unchanged rather than rewritten, as is any record no
+// attributed candidate advertised (the cluster-ingress answer to a peer, which
+// the asking node attributes itself).
+func withModelOwners(raw json.RawMessage, owners []modelListOwner) json.RawMessage {
+	if len(owners) == 0 {
+		return raw
+	}
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &record); err != nil || record == nil {
+		return raw
+	}
+	var meta map[string]json.RawMessage
+	if existing, ok := record["meta"]; ok {
+		if err := json.Unmarshal(existing, &meta); err != nil {
+			return raw
+		}
+	}
+	if meta == nil {
+		meta = make(map[string]json.RawMessage, 1)
+	}
+	pair, err := json.Marshal(struct {
+		Nodes []modelListOwner `json:"nodes"`
+	}{Nodes: owners})
+	if err != nil {
+		return raw
+	}
+	meta["pair"] = pair
+	encodedMeta, err := json.Marshal(meta)
+	if err != nil {
+		return raw
+	}
+	record["meta"] = encodedMeta
+	out, err := json.Marshal(record)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 type modelListResult struct {
 	headers http.Header
 	denied  bool
@@ -970,6 +1024,8 @@ type modelListResult struct {
 // model-list envelope with duplicate model records removed. Results are merged
 // in candidate order, not completion order, so duplicate metadata is
 // deterministic while an unavailable peer cannot hide healthy inventories.
+// Each record names the nodes that advertised it in meta.pair.nodes
+// (withModelOwners), since the de-duplication keeps only the first record.
 //
 // matchedRoute selects the wire dialect and the optional upstream path. The
 // client-facing path remains unchanged in telemetry and in the merged response.
@@ -1136,8 +1192,12 @@ func (f *facade) serveModelList(w http.ResponseWriter, r *http.Request, matchedR
 	}
 
 	success := false
-	models := make([]json.RawMessage, 0)
+	order := make([]string, 0)
 	seen := make(map[string]modelListItem)
+	// owners collects, per record key, every node that advertised it, in
+	// candidate order. Only the first record is kept, so this is the one place
+	// the other owners of a shared model are still known.
+	owners := make(map[string][]modelListOwner)
 	for i, result := range results {
 		if !result.ok {
 			slog.Debug("model list candidate unavailable",
@@ -1145,7 +1205,11 @@ func (f *facade) serveModelList(w http.ResponseWriter, r *http.Request, matchedR
 			continue
 		}
 		success = true
+		owner := modelListOwner{ID: candidates[i].id, Host: candidates[i].host, Engine: candidates[i].engine}
 		for _, item := range result.items {
+			if owner.ID != "" && !slices.Contains(owners[item.key], owner) {
+				owners[item.key] = append(owners[item.key], owner)
+			}
 			if previous, duplicate := seen[item.key]; duplicate {
 				if previous.digest != "" && item.digest != "" && previous.digest != item.digest {
 					slog.Warn("conflicting model digests across candidates",
@@ -1155,8 +1219,12 @@ func (f *facade) serveModelList(w http.ResponseWriter, r *http.Request, matchedR
 				continue
 			}
 			seen[item.key] = item
-			models = append(models, item.raw)
+			order = append(order, item.key)
 		}
+	}
+	models := make([]json.RawMessage, 0, len(order))
+	for _, key := range order {
+		models = append(models, withModelOwners(seen[key].raw, owners[key]))
 	}
 	if !success {
 		err := fmt.Errorf("no valid model list from %d candidate(s)", len(candidates))
@@ -2092,6 +2160,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 						continue
 					}
 					local.id = n.ID
+					local.host = n.Host
 					extra = append(extra, local)
 				}
 			}
@@ -2130,6 +2199,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 		}
 		out = append(out, candidate{
 			id:       n.ID,
+			host:     n.Host,
 			url:      u,
 			peerUUID: peerUUID,
 			engine:   engine,

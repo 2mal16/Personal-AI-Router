@@ -605,6 +605,70 @@ func TestHandleHTTP_UsesEngineSpecificUpstreamModelListPath(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"id":"remapped"`, "remapped model list")
 }
 
+// TestHandleHTTP_ModelListNamesOwnerNodes: the de-duplicated list keeps one
+// record per model, so each record carries every node that advertised it in
+// meta.pair.nodes, in candidate order, beside the record's own meta members.
+// A record whose meta is not an object is passed through untouched.
+func TestHandleHTTP_ModelListNamesOwnerNodes(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		serve := func(body string) *httptest.Server {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, err := io.WriteString(w, body)
+				assert.NoError(t, err)
+			}))
+			t.Cleanup(server.Close)
+			return server
+		}
+		a := serve(`{"object":"list","data":[{"id":"a"},{"id":"shared","meta":{"llamaswap":{"type":"model"},"n_ctx":262144}}]}`)
+		b := serve(`{"object":"list","data":[{"id":"shared"},{"id":"odd","meta":"not-an-object"}]}`)
+
+		nodeA := nodeFor(t, "uuid-a", a.URL)
+		nodeA.Host = "cachy"
+		nodeB := nodeFor(t, "uuid-b", b.URL)
+		nodeB.Host = "agent"
+		disc := NewDiscovery()
+		disc.AddManual(nodeA)
+		disc.AddManual(nodeB)
+		f := testProxy(tc.profile, disc, tc.profile.FacadePort).soleFacade()
+		f.SetSelected("uuid-a")
+		rec := httptest.NewRecorder()
+		f.handleHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+		require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+		type owner struct {
+			ID   string `json:"id"`
+			Host string `json:"host"`
+		}
+		var got struct {
+			Data []struct {
+				ID   string          `json:"id"`
+				Meta json.RawMessage `json:"meta"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		require.Len(t, got.Data, 3, "a, shared, odd; body=%s", rec.Body.String())
+		nodesOf := func(i int) []owner {
+			var meta struct {
+				Pair struct {
+					Nodes []owner `json:"nodes"`
+				} `json:"pair"`
+			}
+			require.NoError(t, json.Unmarshal(got.Data[i].Meta, &meta), "%s meta = %s", got.Data[i].ID, got.Data[i].Meta)
+			return meta.Pair.Nodes
+		}
+		assert.Equal(t, []owner{{"uuid-a", "cachy"}}, nodesOf(0), "a is served only by cachy")
+		assert.Equal(t, []owner{{"uuid-a", "cachy"}, {"uuid-b", "agent"}}, nodesOf(1), "shared: cachy then agent")
+		var shared struct {
+			NCtx      int             `json:"n_ctx"`
+			LlamaSwap json.RawMessage `json:"llamaswap"`
+		}
+		require.NoError(t, json.Unmarshal(got.Data[1].Meta, &shared))
+		assert.Equal(t, 262144, shared.NCtx, "upstream meta members kept beside pair")
+		assert.JSONEq(t, `{"type":"model"}`, string(shared.LlamaSwap), "upstream meta members kept beside pair")
+		assert.Equal(t, `"not-an-object"`, string(got.Data[2].Meta), "non-object meta passed through")
+	})
+}
+
 func TestHandleHTTP_DistinguishesEmptyModelListFromUnavailableNodes(t *testing.T) {
 	forEachEngine(t, func(t *testing.T, tc engineCase) {
 		serveEmpty := func() *httptest.Server {

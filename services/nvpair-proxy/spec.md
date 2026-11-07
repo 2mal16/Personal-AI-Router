@@ -550,6 +550,12 @@ native list, normalized by the engine's naming rule so `llama3` and
 `llama3:latest` are one model. The first record for an identity wins; a later
 one whose `digest` differs is logged as a conflict and dropped.
 
+The kept record's `meta.pair.nodes` names every attributed candidate that
+advertised its identity, in candidate order (`id`, `host`, `engine`). Other
+`meta` members are kept; a record or `meta` that is not a JSON object is passed
+through. A cluster-ingress answer to a peer carries no attribution, so the
+asking node attributes it.
+
 Without an `Origin` header, no usable list is a `503` `{"error":"model
 inventory unavailable"}`; a candidate answering with an empty list is a
 success. With one, the browser-origin gate in §5.8 runs first and answers `502`
