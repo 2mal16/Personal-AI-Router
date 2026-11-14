@@ -37,6 +37,7 @@ import (
 	"nvpair-shared/netpick"
 	"nvpair-shared/nodeactivity"
 	"nvpair-shared/noderec"
+	"nvpair-shared/proxytune"
 	"nvpair-shared/schedulerwire"
 )
 
@@ -748,7 +749,6 @@ func awaitFirstBody(body io.ReadCloser, budget time.Duration) (io.ReadCloser, er
 const (
 	proxyDialTimeout     = 10 * time.Second
 	proxyKeepAlive       = 30 * time.Second
-	proxyResponseTimeout = 120 * time.Second
 	proxyMaxIdleConns    = 50
 	proxyIdleConnTimeout = 90 * time.Second
 	// Inbound http.Server limits — keep IdleTimeout aligned with client
@@ -773,8 +773,9 @@ const (
 var idleClientWriteTimeout = 30 * time.Second
 
 // firstBodyTimeout bounds how long awaitFirstBody waits for an engine to emit
-// its first content byte. It matches proxyResponseTimeout, the budget the
-// transport applies to headers, because from the caller's point of view the two
+// its first content byte. It matches proxytune.ResponseHeaderTimeout, the
+// budget the transport applies to headers (120s unless NVPAIR_RESPONSE_HEADER_TIMEOUT
+// raises it for engines that cold-start large models), because from the caller's point of view the two
 // bound the same thing: how long we wait for a node to start the work. Keeping
 // it generous is deliberate — it also covers a cold model load, which is real
 // work rather than a stall, and which cannot be told apart from a queue wait
@@ -782,7 +783,7 @@ var idleClientWriteTimeout = 30 * time.Second
 //
 // It is a var (not a const) only so a test can shorten it; production never
 // reassigns it.
-var firstBodyTimeout = proxyResponseTimeout
+var firstBodyTimeout = proxytune.ResponseHeaderTimeout()
 
 // candidateCooldown is how long a node that spent a full first-byte deadline
 // without producing content is ordered behind its peers.
@@ -795,7 +796,10 @@ var firstBodyTimeout = proxyResponseTimeout
 //
 // It is a var (not a const) only so a test can shorten it; production never
 // reassigns it.
-var candidateCooldown = proxyResponseTimeout
+//
+// Under NVPAIR_RESPONSE_HEADER_TIMEOUT the deadline, and so this cooldown, is
+// the configured value.
+var candidateCooldown = firstBodyTimeout
 
 var modelListClient = &http.Client{
 	Transport: &http.Transport{
@@ -865,7 +869,7 @@ func newProxyTransport(tlsCfg *tls.Config) *http.Transport {
 			Timeout:   proxyDialTimeout,
 			KeepAlive: proxyKeepAlive,
 		}).DialContext,
-		ResponseHeaderTimeout: proxyResponseTimeout,
+		ResponseHeaderTimeout: proxytune.ResponseHeaderTimeout(),
 		MaxIdleConns:          proxyMaxIdleConns,
 		MaxIdleConnsPerHost:   proxyMaxIdleConns,
 		IdleConnTimeout:       proxyIdleConnTimeout,
