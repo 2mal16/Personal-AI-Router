@@ -113,3 +113,24 @@ func TestUnverifiedEntry_EnginesProbedInPlaintext(t *testing.T) {
 	assert.True(t, nodes[0].OllamaUp)
 	assert.Equal(t, []string{"llama3.2"}, nodes[0].OllamaModels)
 }
+
+// A verified host whose engines don't run behind PAIR's proxies answers in
+// plaintext only. Its engines are still found, and no principal is reported,
+// so the proxies don't try to reach it over cluster mTLS.
+func TestVerifiedHost_EngineWithoutMTLSFallsBackToPlaintext(t *testing.T) {
+	f := newManualPeerFixture(t)
+	f.manager.enginePeerClient = func(string) (*http.Client, bool) {
+		return &http.Client{Transport: newFakeRoundTripper(), Timeout: time.Second}, true
+	}
+	plain, ok := f.manager.client.Transport.(*fakeRoundTripper)
+	require.True(t, ok)
+	configureHealthyOllama(t, plain, f.entry.Address, []string{"plain-model"})
+
+	status := probedStatus(t, f)
+
+	assert.Equal(t, noderec.IdentityPinned, status.IdentityVerification)
+	assert.True(t, status.OllamaUp)
+	assert.Equal(t, []string{"plain-model"}, status.OllamaModels)
+	assert.Empty(t, status.ClusterUUID, "reported a principal no engine answered through")
+	assert.Nil(t, status.ModelsByEngine)
+}

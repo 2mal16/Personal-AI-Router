@@ -503,20 +503,33 @@ func (m *Manager) probeNode(entry ManualEntry) {
 	if nodeInfoUp {
 		enginePeer = info.HostUUID
 	}
-	engineClient, engineScheme := m.client, "http"
 	var modelsByEngine map[string][]string
-	peerClient, pinned := (*http.Client)(nil), false
+	var ollamaUp, lmStudioUp, overMTLS bool
+	var ollamaModels, lmStudioModels []string
 	if enginePeer != "" {
-		peerClient, pinned = m.engineClient(enginePeer)
+		if peerClient, pinned := m.engineClient(enginePeer); pinned {
+			ollamaUp, ollamaModels = m.probeOllama(peerClient, "https", addr, 11434)
+			lmStudioUp, lmStudioModels = m.probeLMStudio(peerClient, "https", addr, lmStudioPort)
+			overMTLS = ollamaUp || lmStudioUp
+			if overMTLS {
+				modelsByEngine = m.fetchModelsByEngine(peerClient, addr)
+			}
+		}
 	}
-	if pinned {
-		engineClient, engineScheme = peerClient, "https"
-		modelsByEngine = m.fetchModelsByEngine(peerClient, addr)
-	} else {
+	// A verified host need not run PAIR's proxies: an engine that did not
+	// answer over cluster mTLS is probed in plaintext, the configured target
+	// any other entry gets.
+	if !ollamaUp {
+		ollamaUp, ollamaModels = m.probeOllama(m.client, "http", addr, 11434)
+	}
+	if !lmStudioUp {
+		lmStudioUp, lmStudioModels = m.probeLMStudio(m.client, "http", addr, lmStudioPort)
+	}
+	// The principal reaches the proxies only when an engine answered through
+	// it, so they dial over mTLS only a peer whose proxies accept that.
+	if !overMTLS {
 		enginePeer = ""
 	}
-	ollamaUp, ollamaModels := m.probeOllama(engineClient, engineScheme, addr, 11434)
-	lmStudioUp, lmStudioModels := m.probeLMStudio(engineClient, engineScheme, addr, lmStudioPort)
 
 	newStatus := ManualNodeStatus{
 		DiscoveryRecordID:    info.discoveryRecordID,
